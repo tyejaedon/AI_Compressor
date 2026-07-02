@@ -1,0 +1,6 @@
+numpy>=1.23,<2.0
+matplotlib>=3.7,<4.0
+imageio-ffmpeg>=0.4.9,<1.0
+tensorflow-macos>=2.15,<2.20; platform_system == "Darwin"
+tensorflow-metal>=1.1.0; platform_system == "Darwin"
+tensorflow>=2.15,<2.20; platform_system != "Darwin"
