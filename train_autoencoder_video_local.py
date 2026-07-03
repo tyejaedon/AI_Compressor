@@ -2,7 +2,6 @@
 """Local video autoencoder trainer with MP4 benchmark and TFLite export."""
 
 import argparse
-import json
 import math
 import os
 import shutil
@@ -15,6 +14,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras import Model, callbacks, layers
+
+from report_markdown import write_markdown_json_report
 
 
 def parse_args():
@@ -427,11 +428,10 @@ def decode_mp4(ffmpeg, in_path, width, height):
 
 def run_mp4_benchmark(model, test_data, run_dir, fps):
     ffmpeg = shutil.which("ffmpeg")
-    report_path = os.path.join(run_dir, "video_mp4_benchmark.json")
+    report_path = os.path.join(run_dir, "video_mp4_benchmark.md")
     if not isinstance(ffmpeg, str) or not ffmpeg:
         payload = {"status": "skipped", "reason": "ffmpeg_not_found"}
-        with open(report_path, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2)
+        write_markdown_json_report(payload, report_path, title="Video MP4 Benchmark")
         return report_path
 
     clips = []
@@ -493,8 +493,7 @@ def run_mp4_benchmark(model, test_data, run_dir, fps):
                 )
 
     payload = {"status": "ok", "results": results}
-    with open(report_path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2)
+    write_markdown_json_report(payload, report_path, title="Video MP4 Benchmark")
     return report_path
 
 
@@ -507,9 +506,8 @@ def save_report(args, history, eval_values, run_dir, preview_path, benchmark_pat
         "preview": preview_path,
         "benchmark": benchmark_path,
     }
-    report_path = os.path.join(run_dir, "video_evaluation_report.json")
-    with open(report_path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2)
+    report_path = os.path.join(run_dir, "video_evaluation_report.md")
+    write_markdown_json_report(payload, report_path, title="Video Evaluation Report")
     return report_path
 
 

@@ -2,7 +2,6 @@
 """Local MacBook-friendly image autoencoder trainer."""
 
 import argparse
-import json
 import math
 import os
 import sys
@@ -13,6 +12,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras import Model, callbacks, layers
+
+from report_markdown import write_markdown_json_report
 
 
 def parse_args():
@@ -408,9 +409,8 @@ def save_report(args, split_info, history, eval_values, run_dir, plot_path):
         "test_metrics": {k: float(v) for k, v in eval_values.items()},
         "plot_path": plot_path,
     }
-    report_path = os.path.join(run_dir, "evaluation_report.json")
-    with open(report_path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2)
+    report_path = os.path.join(run_dir, "evaluation_report.md")
+    write_markdown_json_report(payload, report_path, title="Image Evaluation Report")
     return report_path
 
 

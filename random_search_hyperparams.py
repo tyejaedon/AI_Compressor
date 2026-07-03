@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from report_markdown import read_markdown_json_report
+
 
 @dataclass
 class TrialResult:
@@ -62,9 +64,9 @@ def modality_to_script(modality: str) -> str:
 
 def modality_to_report_name(modality: str) -> str:
     mapping = {
-        "image": "evaluation_report.json",
-        "audio": "audio_evaluation_report.json",
-        "video": "video_evaluation_report.json",
+        "image": "evaluation_report.md",
+        "audio": "audio_evaluation_report.md",
+        "video": "video_evaluation_report.md",
     }
     return mapping[modality]
 
@@ -206,9 +208,8 @@ def find_report(trial_root: Path, report_name: str) -> Path | None:
 
 
 def read_psnr(report_path: Path) -> float | None:
-    try:
-        payload = json.loads(report_path.read_text(encoding="utf-8"))
-    except Exception:
+    payload = read_markdown_json_report(report_path)
+    if payload is None:
         return None
     value = payload.get("test_metrics", {}).get("psnr_metric")
     if isinstance(value, (int, float)):

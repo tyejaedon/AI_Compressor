@@ -9,10 +9,10 @@ Traditional codecs (JPEG/MP3/H.264) are hand-engineered. Neural compression lear
 ## Current benchmark snapshot (July 2026)
 
 | Modality | Test PSNR | Test MSE | Test Loss | Test SSIM/SNR |
-|---|---:|---:|---:|---:|
-| Image | 30.645 | 0.001 | 0.004 | SSIM 0.983 |
-| Audio | 32.223 | 0.001 | 0.024 | SNR 21.981 dB |
-| Video | 30.423 | 0.001 | 0.014 | SSIM 0.898 |
+|----------|----------:|---------:|----------:|--------------:|
+| Image    |    30.645 |    0.001 |     0.004 |    SSIM 0.983 |
+| Audio    |    32.223 |    0.001 |     0.024 | SNR 21.981 dB |
+| Video    |    30.423 |    0.001 |     0.014 |    SSIM 0.898 |
 
 Average across best models:
 
@@ -20,16 +20,49 @@ Average across best models:
 - Best validation PSNR: **31.213**
 - Final training PSNR: **29.391**
 
+## Model Hyperparameters
+Best model hyperparameters for each modality (from the current best runs):
+
+| Modality | Latent Dim | Encoder Depth | Decoder Depth | Learning Rate | Batch Size | Epochs |
+|:---------|-----------:|--------------:|--------------:|--------------:|-----------:|-------:|
+| Image    |        128 |             4 | 4             | 0.001         | 32         | 50     |
+| Audio    |         64 |             3 | 3             | 0.0005        | 16         | 50     |
+| Video    |        192 | 5             | 5             | 0.0001        | 8          | 15     |
+
+
+
+
+## Training Metrics  (x axis : Epochs)
+### Image Model:
+![training_metrics.png](models/production_bundle/best_20260702_235656/image/training_metrics.png)
+image model training metrics (PSNR, MSE, Loss, SSIM) over epochs
+### Audio Model:
+![training_metrics.png](models/production_bundle/best_20260702_235656/audio/audio_training_metrics.png)
+audio model training metrics (PSNR, MSE, Loss, SNR) over epochs
+### Video Model:
+![training_metrics.png](models/production_bundle/best_20260702_235656/video/video_training_metrics.png)
+video model training metrics (PSNR, MSE, Loss, SSIM) over epochs
+
+## Preview reconstruction quality of best models
+preview of reconstruction quality for best models on test data, showing original and reconstructed samples.
+### Image:
+![image_reconstruction.png](models/production_bundle/best_20260702_235656/image/preview_reconstructions.png)
+
+### Audio:
+![audio_reconstruction.png](models/production_bundle/best_20260702_235656/audio/audio_preview_waveform.png)
+Playback audio: [audio_preview_reconstruction.wav](models/production_bundle/best_20260702_235656/audio/audio_preview_reconstruction.wav)
+### Video:
+![video_reconstruction.png](models/production_bundle/best_20260702_235656/video/video_preview_reconstruction.png)
+
 Source reports:
 
-- `models/random_search_goal30/image/trial_001/20260702_230938/evaluation_report.json`
-- `models/random_search_goal30/audio/trial_001/20260702_182301/audio_evaluation_report.json`
-- `models/random_search_goal30/video/trial_001/20260702_183130/video_evaluation_report.json`
+- `models/random_search_goal30/image/trial_001/20260702_230938/evaluation_report.md`
+- `models/random_search_goal30/audio/trial_001/20260702_182301/audio_evaluation_report.md`
+- `models/random_search_goal30/video/trial_001/20260702_183130/video_evaluation_report.md`
 
 ## Quick start
 
 ```zsh
-cd /Users/tyejaedon/PycharmProjects/AI_Compressor
 python3 -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
@@ -74,7 +107,7 @@ Each run writes artifacts and metrics under `models/.../<timestamp>/` including:
 
 - model weights/checkpoints (`.h5`, `.keras`, optionally `.tflite`)
 - training curves (`*.png`)
-- evaluation reports (`evaluation_report.json`, `audio_evaluation_report.json`, `video_evaluation_report.json`)
+- evaluation reports (`evaluation_report.md`, `audio_evaluation_report.md`, `video_evaluation_report.md`)
 
 ## Project constraints
 

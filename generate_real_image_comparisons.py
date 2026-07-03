@@ -10,6 +10,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
 
+from report_markdown import write_markdown_json_report
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Generate real-image compression comparisons.")
@@ -164,11 +166,8 @@ def main():
         "contact_sheet": contact_sheet_path,
         "samples": report_samples,
     }
-    report_path = os.path.join(run_dir, "comparison_report.json")
-    with open(report_path, "w", encoding="utf-8") as f:
-        import json
-
-        json.dump(report, f, indent=2)
+    report_path = os.path.join(run_dir, "comparison_report.md")
+    write_markdown_json_report(report, report_path, title="Image Comparison Report")
 
     print(run_dir)
     print(contact_sheet_path)
