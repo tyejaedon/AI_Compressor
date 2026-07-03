@@ -25,14 +25,14 @@ Best model hyperparameters for each modality (from the current best runs):
 
 | Modality | Latent Dim | Encoder Depth | Decoder Depth | Learning Rate | Batch Size | Epochs |
 |:---------|-----------:|--------------:|--------------:|--------------:|-----------:|-------:|
-| Image    |        128 |             4 | 4             | 0.001         | 32         | 50     |
-| Audio    |         64 |             3 | 3             | 0.0005        | 16         | 50     |
-| Video    |        192 | 5             | 5             | 0.0001        | 8          | 15     |
+| Image    |        128 |             4 |             4 |         0.001 |         32 |     50 |
+| Audio    |         64 |             3 |             3 |        0.0005 |         16 |     50 |
+| Video    |        192 |             5 |             5 |        0.0001 |          8 |     15 |
 
 
 
 
-## Training Metrics  (x axis : Epochs)
+## Training Metrics  (x-axis : Epochs)
 ### Image Model:
 ![training_metrics.png](models/production_bundle/best_20260702_235656/image/training_metrics.png)
 image model training metrics (PSNR, MSE, Loss, SSIM) over epochs
@@ -40,7 +40,7 @@ image model training metrics (PSNR, MSE, Loss, SSIM) over epochs
 ![training_metrics.png](models/production_bundle/best_20260702_235656/audio/audio_training_metrics.png)
 audio model training metrics (PSNR, MSE, Loss, SNR) over epochs
 ### Video Model:
-![training_metrics.png](models/production_bundle/best_20260702_235656/video/video_training_metrics.png)
+![training_metrics.png](models/production_bundle/best_20260702_235656/video/video_training_view_metrics.png)
 video model training metrics (PSNR, MSE, Loss, SSIM) over epochs
 
 ## Preview reconstruction quality of best models
