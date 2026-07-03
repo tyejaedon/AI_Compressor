@@ -1,0 +1,63 @@
+{
+  "created_at_utc": "2026-07-02T14:16:48.029218Z",
+  "bundle_dir": "/Users/tyejaedon/PycharmProjects/AI_Compressor/models/production_bundle/best_20260702_171648",
+  "selection_strategy": "highest test_metrics.psnr_metric per modality",
+  "models": {
+    "image": {
+      "psnr_metric": 22.447063446044922,
+      "source_report": "tuned_runs/image_bestcfg/20260702_171043/evaluation_report.json",
+      "source_run_dir": "tuned_runs/image_bestcfg/20260702_171043",
+      "test_metrics": {
+        "loss": 0.013780826702713966,
+        "mse": 0.00569269759580493,
+        "psnr_metric": 22.447063446044922,
+        "ssim_metric": 0.9325001239776611
+      },
+      "copied_files": [
+        "best_model.keras",
+        "evaluation_report.json",
+        "preview_reconstructions.png",
+        "production_model.weights.h5",
+        "training_metrics.png"
+      ]
+    },
+    "audio": {
+      "psnr_metric": 31.4471435546875,
+      "source_report": "audio_prod_psnr35/20260629_165547/audio_evaluation_report.json",
+      "source_run_dir": "audio_prod_psnr35/20260629_165547",
+      "test_metrics": {
+        "loss": 0.021836860105395317,
+        "mse": 0.003064024029299617,
+        "psnr_metric": 31.4471435546875,
+        "snr_db_metric": 12.62895393371582
+      },
+      "copied_files": [
+        "audio_autoencoder.tflite",
+        "audio_evaluation_report.json",
+        "audio_model.weights.h5",
+        "audio_mp3_benchmark.json",
+        "audio_preview_reconstruction.wav",
+        "audio_preview_waveform.png",
+        "audio_training_metrics.png",
+        "best_audio_model.keras"
+      ]
+    },
+    "video": {
+      "psnr_metric": 24.394493103027344,
+      "source_report": "random_search_full/video/trial_001/20260702_170056/video_evaluation_report.json",
+      "source_run_dir": "random_search_full/video/trial_001/20260702_170056",
+      "test_metrics": {
+        "loss": 0.025666935369372368,
+        "mse": 0.004401511047035456,
+        "psnr_metric": 24.394493103027344,
+        "ssim_metric": 0.8452472686767578
+      },
+      "copied_files": [
+        "best_video_model.keras",
+        "video_evaluation_report.json",
+        "video_model.weights.h5",
+        "video_preview_reconstruction.png"
+      ]
+    }
+  }
+}

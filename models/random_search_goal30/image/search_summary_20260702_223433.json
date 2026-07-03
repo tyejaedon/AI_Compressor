@@ -1,0 +1,176 @@
+{
+  "timestamp_utc": "2026-07-02T19:34:33Z",
+  "modality": "image",
+  "resource_profile": "balanced",
+  "requested_trials": 8,
+  "until_goal": true,
+  "max_total_trials": 80,
+  "goal_psnr": 30.0,
+  "goal_reached": true,
+  "completed_trials": 4,
+  "successful_trials": 4,
+  "budget_minutes": 720.0,
+  "elapsed_minutes": 256.849,
+  "best_trial": {
+    "trial_id": 4,
+    "psnr_metric": 30.212997436523438,
+    "params": {
+      "preset": "custom",
+      "block_size": 32,
+      "latent_dim": 256,
+      "batch_size": 4,
+      "epochs": 30,
+      "lr": 0.0001089
+    },
+    "report_path": "/Users/tyejaedon/PycharmProjects/AI_Compressor/models/random_search_goal30/image/trial_004/20260702_202735/evaluation_report.json",
+    "run_dir": "/Users/tyejaedon/PycharmProjects/AI_Compressor/models/random_search_goal30/image/trial_004/20260702_202735",
+    "duration_sec": 7623.734
+  },
+  "top_trials": [
+    {
+      "trial_id": 4,
+      "psnr_metric": 30.212997436523438,
+      "params": {
+        "preset": "custom",
+        "block_size": 32,
+        "latent_dim": 256,
+        "batch_size": 4,
+        "epochs": 30,
+        "lr": 0.0001089
+      },
+      "report_path": "/Users/tyejaedon/PycharmProjects/AI_Compressor/models/random_search_goal30/image/trial_004/20260702_202735/evaluation_report.json",
+      "run_dir": "/Users/tyejaedon/PycharmProjects/AI_Compressor/models/random_search_goal30/image/trial_004/20260702_202735",
+      "duration_sec": 7623.734,
+      "status": "ok"
+    },
+    {
+      "trial_id": 1,
+      "psnr_metric": 27.49850845336914,
+      "params": {
+        "preset": "custom",
+        "block_size": 32,
+        "latent_dim": 64,
+        "batch_size": 8,
+        "epochs": 20,
+        "lr": 7.88e-05
+      },
+      "report_path": "/Users/tyejaedon/PycharmProjects/AI_Compressor/models/random_search_goal30/image/trial_001/20260702_181745/evaluation_report.json",
+      "run_dir": "/Users/tyejaedon/PycharmProjects/AI_Compressor/models/random_search_goal30/image/trial_001/20260702_181745",
+      "duration_sec": 287.947,
+      "status": "ok"
+    },
+    {
+      "trial_id": 3,
+      "psnr_metric": 27.44978141784668,
+      "params": {
+        "preset": "custom",
+        "block_size": 96,
+        "latent_dim": 64,
+        "batch_size": 4,
+        "epochs": 12,
+        "lr": 7.5e-05
+      },
+      "report_path": "/Users/tyejaedon/PycharmProjects/AI_Compressor/models/random_search_goal30/image/trial_003/20260702_183524/evaluation_report.json",
+      "run_dir": "/Users/tyejaedon/PycharmProjects/AI_Compressor/models/random_search_goal30/image/trial_003/20260702_183524",
+      "duration_sec": 6731.932,
+      "status": "ok"
+    }
+  ],
+  "educated_guess_ranges": {
+    "block_size": {
+      "min": 32.0,
+      "max": 96.0,
+      "mean": 53.3333333
+    },
+    "latent_dim": {
+      "min": 64.0,
+      "max": 256.0,
+      "mean": 128.0
+    },
+    "batch_size": {
+      "min": 4.0,
+      "max": 8.0,
+      "mean": 5.3333333
+    },
+    "epochs": {
+      "min": 12.0,
+      "max": 30.0,
+      "mean": 20.6666667
+    },
+    "lr": {
+      "min": 7.5e-05,
+      "max": 0.0001089,
+      "mean": 8.76e-05
+    }
+  },
+  "all_trials": [
+    {
+      "trial_id": 1,
+      "psnr_metric": 27.49850845336914,
+      "params": {
+        "preset": "custom",
+        "block_size": 32,
+        "latent_dim": 64,
+        "batch_size": 8,
+        "epochs": 20,
+        "lr": 7.88e-05
+      },
+      "duration_sec": 287.947,
+      "report_path": "/Users/tyejaedon/PycharmProjects/AI_Compressor/models/random_search_goal30/image/trial_001/20260702_181745/evaluation_report.json",
+      "run_dir": "/Users/tyejaedon/PycharmProjects/AI_Compressor/models/random_search_goal30/image/trial_001/20260702_181745",
+      "status": "ok",
+      "error": null
+    },
+    {
+      "trial_id": 2,
+      "psnr_metric": 26.962318420410156,
+      "params": {
+        "preset": "custom",
+        "block_size": 48,
+        "latent_dim": 64,
+        "batch_size": 8,
+        "epochs": 30,
+        "lr": 5.88e-05
+      },
+      "duration_sec": 767.337,
+      "report_path": "/Users/tyejaedon/PycharmProjects/AI_Compressor/models/random_search_goal30/image/trial_002/20260702_182234/evaluation_report.json",
+      "run_dir": "/Users/tyejaedon/PycharmProjects/AI_Compressor/models/random_search_goal30/image/trial_002/20260702_182234",
+      "status": "ok",
+      "error": null
+    },
+    {
+      "trial_id": 3,
+      "psnr_metric": 27.44978141784668,
+      "params": {
+        "preset": "custom",
+        "block_size": 96,
+        "latent_dim": 64,
+        "batch_size": 4,
+        "epochs": 12,
+        "lr": 7.5e-05
+      },
+      "duration_sec": 6731.932,
+      "report_path": "/Users/tyejaedon/PycharmProjects/AI_Compressor/models/random_search_goal30/image/trial_003/20260702_183524/evaluation_report.json",
+      "run_dir": "/Users/tyejaedon/PycharmProjects/AI_Compressor/models/random_search_goal30/image/trial_003/20260702_183524",
+      "status": "ok",
+      "error": null
+    },
+    {
+      "trial_id": 4,
+      "psnr_metric": 30.212997436523438,
+      "params": {
+        "preset": "custom",
+        "block_size": 32,
+        "latent_dim": 256,
+        "batch_size": 4,
+        "epochs": 30,
+        "lr": 0.0001089
+      },
+      "duration_sec": 7623.734,
+      "report_path": "/Users/tyejaedon/PycharmProjects/AI_Compressor/models/random_search_goal30/image/trial_004/20260702_202735/evaluation_report.json",
+      "run_dir": "/Users/tyejaedon/PycharmProjects/AI_Compressor/models/random_search_goal30/image/trial_004/20260702_202735",
+      "status": "ok",
+      "error": null
+    }
+  ]
+}

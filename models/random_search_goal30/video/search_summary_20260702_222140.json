@@ -1,0 +1,109 @@
+{
+  "timestamp_utc": "2026-07-02T19:21:40Z",
+  "modality": "video",
+  "resource_profile": "balanced",
+  "requested_trials": 8,
+  "until_goal": true,
+  "max_total_trials": 120,
+  "goal_psnr": 30.0,
+  "goal_reached": true,
+  "completed_trials": 1,
+  "successful_trials": 1,
+  "budget_minutes": 960.0,
+  "elapsed_minutes": 230.268,
+  "best_trial": {
+    "trial_id": 1,
+    "psnr_metric": 30.423437118530273,
+    "params": {
+      "preset": "custom",
+      "latent_dim": 192,
+      "batch_size": 2,
+      "epochs": 16,
+      "lr": 5.93e-05,
+      "frames": 4,
+      "height": 64,
+      "width": 32
+    },
+    "report_path": "/Users/tyejaedon/PycharmProjects/AI_Compressor/models/random_search_goal30/video/trial_001/20260702_183130/video_evaluation_report.json",
+    "run_dir": "/Users/tyejaedon/PycharmProjects/AI_Compressor/models/random_search_goal30/video/trial_001/20260702_183130",
+    "duration_sec": 13816.076
+  },
+  "top_trials": [
+    {
+      "trial_id": 1,
+      "psnr_metric": 30.423437118530273,
+      "params": {
+        "preset": "custom",
+        "latent_dim": 192,
+        "batch_size": 2,
+        "epochs": 16,
+        "lr": 5.93e-05,
+        "frames": 4,
+        "height": 64,
+        "width": 32
+      },
+      "report_path": "/Users/tyejaedon/PycharmProjects/AI_Compressor/models/random_search_goal30/video/trial_001/20260702_183130/video_evaluation_report.json",
+      "run_dir": "/Users/tyejaedon/PycharmProjects/AI_Compressor/models/random_search_goal30/video/trial_001/20260702_183130",
+      "duration_sec": 13816.076,
+      "status": "ok"
+    }
+  ],
+  "educated_guess_ranges": {
+    "latent_dim": {
+      "min": 192.0,
+      "max": 192.0,
+      "mean": 192.0
+    },
+    "batch_size": {
+      "min": 2.0,
+      "max": 2.0,
+      "mean": 2.0
+    },
+    "epochs": {
+      "min": 16.0,
+      "max": 16.0,
+      "mean": 16.0
+    },
+    "lr": {
+      "min": 5.93e-05,
+      "max": 5.93e-05,
+      "mean": 5.93e-05
+    },
+    "frames": {
+      "min": 4.0,
+      "max": 4.0,
+      "mean": 4.0
+    },
+    "height": {
+      "min": 64.0,
+      "max": 64.0,
+      "mean": 64.0
+    },
+    "width": {
+      "min": 32.0,
+      "max": 32.0,
+      "mean": 32.0
+    }
+  },
+  "all_trials": [
+    {
+      "trial_id": 1,
+      "psnr_metric": 30.423437118530273,
+      "params": {
+        "preset": "custom",
+        "latent_dim": 192,
+        "batch_size": 2,
+        "epochs": 16,
+        "lr": 5.93e-05,
+        "frames": 4,
+        "height": 64,
+        "width": 32
+      },
+      "duration_sec": 13816.076,
+      "report_path": "/Users/tyejaedon/PycharmProjects/AI_Compressor/models/random_search_goal30/video/trial_001/20260702_183130/video_evaluation_report.json",
+      "run_dir": "/Users/tyejaedon/PycharmProjects/AI_Compressor/models/random_search_goal30/video/trial_001/20260702_183130",
+      "status": "ok",
+      "error": null
+    }
+  ]
+}

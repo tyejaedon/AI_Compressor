@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import json
 import math
 import os
 from datetime import datetime, timezone
@@ -14,34 +13,30 @@ import numpy as np
 from PIL import Image
 import tensorflow as tf
 
+from report_markdown import read_markdown_json_report
+
 
 WORKSPACE = Path("/Users/tyejaedon/PycharmProjects/AI_Compressor")
 MODELS_DIR = WORKSPACE / "models"
 
 
 MAJOR_RUN_FILES = [
-    ("Image", "local_run/20260626_005606/evaluation_report.json", "synthetic_best"),
-    ("Image", "local_real_run/20260629_101835/evaluation_report.json", "real_prod"),
-    ("Image", "local_run_tuned_fast/20260629_065112/evaluation_report.json", "tuned_fast"),
-    ("Image", "image_realdata_psnr30/20260629_150224/evaluation_report.json", "realdata_psnr30"),
-    ("Image", "image_realdata_psnr30_try2/20260629_150721/evaluation_report.json", "realdata_psnr30_try2"),
-    ("Audio", "audio_local_run/20260627_161410/audio_evaluation_report.json", "baseline"),
-    ("Audio", "audio_real_run_v2/20260629_125927/audio_evaluation_report.json", "real_run_v2"),
-    ("Audio", "audio_realdata_opt_smoke/20260629_145612/audio_evaluation_report.json", "realdata_opt_smoke"),
-    ("Video", "video_local_run_tuned_fast2/20260629_070559/video_evaluation_report.json", "tuned_fast2"),
-    ("Video", "video_realdata_opt_smoke/20260629_145842/video_evaluation_report.json", "realdata_opt_smoke"),
+    ("Image", "local_run/20260626_005606/evaluation_report.md", "synthetic_best"),
+    ("Image", "local_real_run/20260629_101835/evaluation_report.md", "real_prod"),
+    ("Image", "local_run_tuned_fast/20260629_065112/evaluation_report.md", "tuned_fast"),
+    ("Image", "image_realdata_psnr30/20260629_150224/evaluation_report.md", "realdata_psnr30"),
+    ("Image", "image_realdata_psnr30_try2/20260629_150721/evaluation_report.md", "realdata_psnr30_try2"),
+    ("Audio", "audio_local_run/20260627_161410/audio_evaluation_report.md", "baseline"),
+    ("Audio", "audio_real_run_v2/20260629_125927/audio_evaluation_report.md", "real_run_v2"),
+    ("Audio", "audio_realdata_opt_smoke/20260629_145612/audio_evaluation_report.md", "realdata_opt_smoke"),
+    ("Video", "video_local_run_tuned_fast2/20260629_070559/video_evaluation_report.md", "tuned_fast2"),
+    ("Video", "video_realdata_opt_smoke/20260629_145842/video_evaluation_report.md", "realdata_opt_smoke"),
     ("Bundle", "production_bundle/best_20260629_142034/metadata.json", "production_bundle"),
 ]
 
 
 def read_json(path: Path) -> dict[str, Any] | None:
-    if not path.exists():
-        return None
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return None
+    return read_markdown_json_report(path)
 
 
 def fmt(v: Any, ndigits: int = 4) -> str:

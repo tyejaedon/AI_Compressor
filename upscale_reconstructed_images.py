@@ -2,7 +2,6 @@
 """Run image autoencoder reconstruction and upscale outputs to original size or 720p."""
 
 import argparse
-import json
 import os
 from datetime import datetime
 from pathlib import Path
@@ -10,6 +9,8 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
+
+from report_markdown import write_markdown_json_report
 
 
 def parse_args():
@@ -161,9 +162,8 @@ def main():
         "output_dir": run_dir,
         "samples": samples,
     }
-    report_path = os.path.join(run_dir, "upscale_report.json")
-    with open(report_path, "w", encoding="utf-8") as f:
-        json.dump(report, f, indent=2)
+    report_path = os.path.join(run_dir, "upscale_report.md")
+    write_markdown_json_report(report, report_path, title="Upscale Report")
 
     print(run_dir)
     print(report_path)

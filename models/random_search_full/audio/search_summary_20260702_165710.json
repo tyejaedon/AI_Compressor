@@ -1,0 +1,132 @@
+{
+  "timestamp_utc": "2026-07-02T13:57:10Z",
+  "modality": "audio",
+  "resource_profile": "tiny",
+  "requested_trials": 2,
+  "completed_trials": 2,
+  "successful_trials": 2,
+  "budget_minutes": 10.0,
+  "elapsed_minutes": 6.821,
+  "best_trial": {
+    "trial_id": 1,
+    "psnr_metric": 25.413921356201172,
+    "params": {
+      "preset": "custom",
+      "latent_dim": 320,
+      "batch_size": 8,
+      "epochs": 4,
+      "lr": 0.0001979,
+      "clip_seconds": 0.5,
+      "synthetic_profile": "legacy"
+    },
+    "report_path": "/Users/tyejaedon/PycharmProjects/AI_Compressor/models/random_search_full/audio/trial_001/20260702_165029/audio_evaluation_report.json",
+    "run_dir": "/Users/tyejaedon/PycharmProjects/AI_Compressor/models/random_search_full/audio/trial_001/20260702_165029",
+    "duration_sec": 121.303
+  },
+  "top_trials": [
+    {
+      "trial_id": 1,
+      "psnr_metric": 25.413921356201172,
+      "params": {
+        "preset": "custom",
+        "latent_dim": 320,
+        "batch_size": 8,
+        "epochs": 4,
+        "lr": 0.0001979,
+        "clip_seconds": 0.5,
+        "synthetic_profile": "legacy"
+      },
+      "report_path": "/Users/tyejaedon/PycharmProjects/AI_Compressor/models/random_search_full/audio/trial_001/20260702_165029/audio_evaluation_report.json",
+      "run_dir": "/Users/tyejaedon/PycharmProjects/AI_Compressor/models/random_search_full/audio/trial_001/20260702_165029",
+      "duration_sec": 121.303,
+      "status": "ok"
+    },
+    {
+      "trial_id": 2,
+      "psnr_metric": 24.852813720703125,
+      "params": {
+        "preset": "custom",
+        "latent_dim": 160,
+        "batch_size": 16,
+        "epochs": 4,
+        "lr": 0.0001783,
+        "clip_seconds": 1.0,
+        "synthetic_profile": "legacy"
+      },
+      "report_path": "/Users/tyejaedon/PycharmProjects/AI_Compressor/models/random_search_full/audio/trial_002/20260702_165231/audio_evaluation_report.json",
+      "run_dir": "/Users/tyejaedon/PycharmProjects/AI_Compressor/models/random_search_full/audio/trial_002/20260702_165231",
+      "duration_sec": 287.877,
+      "status": "ok"
+    }
+  ],
+  "educated_guess_ranges": {
+    "latent_dim": {
+      "min": 160.0,
+      "max": 320.0,
+      "mean": 240.0
+    },
+    "batch_size": {
+      "min": 8.0,
+      "max": 16.0,
+      "mean": 12.0
+    },
+    "epochs": {
+      "min": 4.0,
+      "max": 4.0,
+      "mean": 4.0
+    },
+    "lr": {
+      "min": 0.0001783,
+      "max": 0.0001979,
+      "mean": 0.0001881
+    },
+    "clip_seconds": {
+      "min": 0.5,
+      "max": 1.0,
+      "mean": 0.75
+    },
+    "synthetic_profile": {
+      "frequency": {
+        "legacy": 2
+      }
+    }
+  },
+  "all_trials": [
+    {
+      "trial_id": 1,
+      "psnr_metric": 25.413921356201172,
+      "params": {
+        "preset": "custom",
+        "latent_dim": 320,
+        "batch_size": 8,
+        "epochs": 4,
+        "lr": 0.0001979,
+        "clip_seconds": 0.5,
+        "synthetic_profile": "legacy"
+      },
+      "duration_sec": 121.303,
+      "report_path": "/Users/tyejaedon/PycharmProjects/AI_Compressor/models/random_search_full/audio/trial_001/20260702_165029/audio_evaluation_report.json",
+      "run_dir": "/Users/tyejaedon/PycharmProjects/AI_Compressor/models/random_search_full/audio/trial_001/20260702_165029",
+      "status": "ok",
+      "error": null
+    },
+    {
+      "trial_id": 2,
+      "psnr_metric": 24.852813720703125,
+      "params": {
+        "preset": "custom",
+        "latent_dim": 160,
+        "batch_size": 16,
+        "epochs": 4,
+        "lr": 0.0001783,
+        "clip_seconds": 1.0,
+        "synthetic_profile": "legacy"
+      },
+      "duration_sec": 287.877,
+      "report_path": "/Users/tyejaedon/PycharmProjects/AI_Compressor/models/random_search_full/audio/trial_002/20260702_165231/audio_evaluation_report.json",
+      "run_dir": "/Users/tyejaedon/PycharmProjects/AI_Compressor/models/random_search_full/audio/trial_002/20260702_165231",
+      "status": "ok",
+      "error": null
+    }
+  ]
+}

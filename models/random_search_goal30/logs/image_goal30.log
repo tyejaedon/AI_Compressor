@@ -1,0 +1,16 @@
+[*] Starting random search: modality=image, trials=8, budget=720.0 min
+  - Trial 001: running /Users/tyejaedon/PycharmProjects/AI_Compressor/.venv/bin/python /Users/tyejaedon/PycharmProjects/AI_Compressor/train_autoencoder_image_local.py --preset custom --block-size 32 --latent-dim 64 --batch-size 8 --epochs 20 --lr 7.88e-05 --output-root /Users/tyejaedon/PycharmProjects/AI_Compressor/models/random_search_goal30/image/trial_001 --data-dir /Users/tyejaedon/PycharmProjects/AI_Compressor/data/_random_search_missing --allow-synthetic --dummy-samples 2200 --extensive-dummy-samples 2600 --target-psnr 30 --no-export-tflite --block-size 32
+    [+] PSNR=27.499 (287.9s)
+  - Trial 002: running /Users/tyejaedon/PycharmProjects/AI_Compressor/.venv/bin/python /Users/tyejaedon/PycharmProjects/AI_Compressor/train_autoencoder_image_local.py --preset custom --block-size 48 --latent-dim 64 --batch-size 8 --epochs 30 --lr 5.88e-05 --output-root /Users/tyejaedon/PycharmProjects/AI_Compressor/models/random_search_goal30/image/trial_002 --data-dir /Users/tyejaedon/PycharmProjects/AI_Compressor/data/_random_search_missing --allow-synthetic --dummy-samples 2200 --extensive-dummy-samples 2600 --target-psnr 30 --no-export-tflite --block-size 32
+    [+] PSNR=26.962 (767.3s)
+  - Trial 003: running /Users/tyejaedon/PycharmProjects/AI_Compressor/.venv/bin/python /Users/tyejaedon/PycharmProjects/AI_Compressor/train_autoencoder_image_local.py --preset custom --block-size 96 --latent-dim 64 --batch-size 4 --epochs 12 --lr 7.5e-05 --output-root /Users/tyejaedon/PycharmProjects/AI_Compressor/models/random_search_goal30/image/trial_003 --data-dir /Users/tyejaedon/PycharmProjects/AI_Compressor/data/_random_search_missing --allow-synthetic --dummy-samples 2200 --extensive-dummy-samples 2600 --target-psnr 30 --no-export-tflite --block-size 32
+    [+] PSNR=27.450 (6731.9s)
+  - Trial 004: running /Users/tyejaedon/PycharmProjects/AI_Compressor/.venv/bin/python /Users/tyejaedon/PycharmProjects/AI_Compressor/train_autoencoder_image_local.py --preset custom --block-size 32 --latent-dim 256 --batch-size 4 --epochs 30 --lr 0.0001089 --output-root /Users/tyejaedon/PycharmProjects/AI_Compressor/models/random_search_goal30/image/trial_004 --data-dir /Users/tyejaedon/PycharmProjects/AI_Compressor/data/_random_search_missing --allow-synthetic --dummy-samples 2200 --extensive-dummy-samples 2600 --target-psnr 30 --no-export-tflite --block-size 32
+    [+] PSNR=30.213 (7623.7s)
+[+] Goal reached (PSNR 30.213 >= 30.000) at trial 004
+
+[+] Random search complete
+[+] Summary: /Users/tyejaedon/PycharmProjects/AI_Compressor/models/random_search_goal30/image/search_summary_20260702_223433.json
+[+] Best trial: 004
+[+] Best PSNR: 30.213
+[+] Best params: {"batch_size": 4, "block_size": 32, "epochs": 30, "latent_dim": 256, "lr": 0.0001089, "preset": "custom"}

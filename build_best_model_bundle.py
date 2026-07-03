@@ -5,15 +5,16 @@ import json
 import os
 import shutil
 
+from report_markdown import read_markdown_json_report
+
 BASE = "/Users/tyejaedon/PycharmProjects/AI_Compressor/models"
 
 
 def best_report(pattern: str):
     pick = None
     for path in glob.glob(os.path.join(BASE, pattern), recursive=True):
-        try:
-            data = json.load(open(path, "r", encoding="utf-8"))
-        except Exception:
+        data = read_markdown_json_report(path)
+        if data is None:
             continue
         psnr = data.get("test_metrics", {}).get("psnr_metric")
         if not isinstance(psnr, (int, float)):
@@ -27,7 +28,7 @@ def copy_run_artifacts(src_dir: str, dst_dir: str):
     os.makedirs(dst_dir, exist_ok=True)
     copied = []
     for name in sorted(os.listdir(src_dir)):
-        if not name.endswith((".json", ".tflite", ".h5", ".keras", ".png", ".wav")):
+        if not name.endswith((".json", ".md", ".tflite", ".h5", ".keras", ".png", ".wav")):
             continue
         src = os.path.join(src_dir, name)
         if not os.path.isfile(src):
@@ -44,13 +45,13 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
 
     patterns = {
-        "image": "**/evaluation_report.json",
-        "audio": "**/audio_evaluation_report.json",
-        "video": "**/video_evaluation_report.json",
+        "image": "**/evaluation_report.md",
+        "audio": "**/audio_evaluation_report.md",
+        "video": "**/video_evaluation_report.md",
     }
 
     metadata = {
-        "created_at_utc": datetime.datetime.utcnow().isoformat() + "Z",
+        "created_at_utc": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
         "bundle_dir": out_dir,
         "selection_strategy": "highest test_metrics.psnr_metric per modality",
         "models": {},
@@ -77,14 +78,13 @@ def main():
     audio_info = metadata["models"].get("audio")
     if audio_info and "audio_autoencoder.tflite" not in audio_info.get("copied_files", []):
         deploy_best = None
-        for report in glob.glob(os.path.join(BASE, "**/audio_evaluation_report.json"), recursive=True):
+        for report in glob.glob(os.path.join(BASE, "**/audio_evaluation_report.md"), recursive=True):
             run_dir = os.path.dirname(report)
             tflite = os.path.join(run_dir, "audio_autoencoder.tflite")
             if not os.path.exists(tflite):
                 continue
-            try:
-                data = json.load(open(report, "r", encoding="utf-8"))
-            except Exception:
+            data = read_markdown_json_report(report)
+            if data is None:
                 continue
             psnr = data.get("test_metrics", {}).get("psnr_metric")
             if not isinstance(psnr, (int, float)):
@@ -100,7 +100,7 @@ def main():
                 "audio_autoencoder.tflite",
                 "audio_model.weights.h5",
                 "best_audio_model.keras",
-                "audio_evaluation_report.json",
+                "audio_evaluation_report.md",
             ]:
                 src = os.path.join(run_dir, name)
                 if os.path.exists(src):

@@ -2,7 +2,6 @@
 """Generate real-data comparison PNGs for audio and video autoencoders."""
 
 import argparse
-import json
 import os
 import subprocess
 import wave
@@ -12,6 +11,8 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
+
+from report_markdown import write_markdown_json_report
 
 
 def parse_args():
@@ -286,9 +287,8 @@ def main():
         "audio": audio_result,
         "video": video_result,
     }
-    report_path = os.path.join(run_dir, "av_comparison_report.json")
-    with open(report_path, "w", encoding="utf-8") as f:
-        json.dump(report, f, indent=2)
+    report_path = os.path.join(run_dir, "av_comparison_report.md")
+    write_markdown_json_report(report, report_path, title="Audio Video Comparison Report")
 
     print(run_dir)
     print(report_path)

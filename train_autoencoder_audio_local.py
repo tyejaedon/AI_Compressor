@@ -2,7 +2,6 @@
 """Local audio autoencoder trainer with MP3 benchmark and TFLite export."""
 
 import argparse
-import json
 import math
 import os
 import shutil
@@ -20,6 +19,8 @@ os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 
 import tensorflow as tf
 from tensorflow.keras import Model, callbacks, layers
+
+from report_markdown import write_markdown_json_report
 
 
 def parse_args():
@@ -499,11 +500,10 @@ def compute_psnr(a, b):
 
 def run_mp3_benchmark(model, test_data, run_dir, sample_rate):
     ffmpeg = shutil.which("ffmpeg")
-    report_path = os.path.join(run_dir, "audio_mp3_benchmark.json")
+    report_path = os.path.join(run_dir, "audio_mp3_benchmark.md")
     if not isinstance(ffmpeg, str) or not ffmpeg:
         payload = {"status": "skipped", "reason": "ffmpeg_not_found"}
-        with open(report_path, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2)
+        write_markdown_json_report(payload, report_path, title="Audio MP3 Benchmark")
         return report_path
 
     bitrates = ["96k", "128k", "192k"]
@@ -544,8 +544,7 @@ def run_mp3_benchmark(model, test_data, run_dir, sample_rate):
                 )
 
     payload = {"status": "ok", "results": results}
-    with open(report_path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2)
+    write_markdown_json_report(payload, report_path, title="Audio MP3 Benchmark")
     return report_path
 
 
@@ -591,9 +590,8 @@ def save_report(args, history, eval_values, run_dir, preview_plot, preview_wav, 
         "metrics_plot": metrics_plot,
         "benchmark": benchmark_path,
     }
-    report_path = os.path.join(run_dir, "audio_evaluation_report.json")
-    with open(report_path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2)
+    report_path = os.path.join(run_dir, "audio_evaluation_report.md")
+    write_markdown_json_report(payload, report_path, title="Audio Evaluation Report")
     return report_path
 
 
