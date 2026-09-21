@@ -16,24 +16,25 @@ set -euo pipefail
 REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner)"
 echo "Target repo: ${REPO}"
 
+# Ensures a milestone with the given title exists (idempotent). Does NOT print
+# anything to stdout other than status; issues reference milestones by TITLE
+# (gh issue create --milestone expects a name, not a number).
 create_milestone() {
   local title="$1"
   local description="$2"
   local existing
   existing="$(gh api "repos/${REPO}/milestones?state=all" --jq ".[] | select(.title==\"${title}\") | .number" || true)"
   if [[ -n "${existing}" ]]; then
-    echo "Milestone exists: ${title} (#${existing})"
-    echo "${existing}"
+    echo "Milestone exists: ${title} (#${existing})" >&2
     return
   fi
   local number
   number="$(gh api "repos/${REPO}/milestones" -f title="${title}" -f description="${description}" --jq .number)"
   echo "Created milestone: ${title} (#${number})" >&2
-  echo "${number}"
 }
 
 create_issue() {
-  local milestone_num="$1"
+  local milestone_title="$1"
   local title="$2"
   local body="$3"
   local labels="$4"
@@ -42,7 +43,7 @@ create_issue() {
     --title "${title}" \
     --body "${body}" \
     --label "${labels}" \
-    --milestone "${milestone_num}" \
+    --milestone "${milestone_title}" \
     >/dev/null
   echo "  + issue: ${title}"
 }
@@ -53,8 +54,9 @@ for label in "image" "compression" "upscaling" "data-pipeline" "docs" "search"; 
 done
 
 echo "== Milestone 1: Real Rate-Distortion Accounting =="
-M1=$(create_milestone "M1: Real Rate-Distortion Accounting" \
-"Replace heuristic rate proxy with real measurable bitrate/compression accounting. See documentation/IMAGE_PIPELINE_ROADMAP.md#milestone-1")
+M1="M1: Real Rate-Distortion Accounting"
+create_milestone "$M1" \
+"Replace heuristic rate proxy with real measurable bitrate/compression accounting. See documentation/IMAGE_PIPELINE_ROADMAP.md#milestone-1"
 create_issue "$M1" "[image/lossy] Add real bits-per-pixel measurement to evaluation report" \
 "Compute empirical entropy of the quantized latent tensor per test batch and log \`latent_bits_per_pixel\` alongside existing PSNR/SSIM/rate-penalty metrics.
 
@@ -73,8 +75,9 @@ create_issue "$M1" "[image/docs] Document real vs proxy compression metrics" \
 Ref: documentation/IMAGE_PIPELINE_ROADMAP.md, Milestone 1." "image,docs"
 
 echo "== Milestone 2: Quantization-Aware Training & Latent Quality =="
-M2=$(create_milestone "M2: Quantization-Aware Training & Latent Quality" \
-"Close the train/deploy gap in lossy quantization; configurable bit-depth. See documentation/IMAGE_PIPELINE_ROADMAP.md#milestone-2")
+M2="M2: Quantization-Aware Training & Latent Quality"
+create_milestone "$M2" \
+"Close the train/deploy gap in lossy quantization; configurable bit-depth. See documentation/IMAGE_PIPELINE_ROADMAP.md#milestone-2"
 create_issue "$M2" "[image/lossy] Make latent quantization bit-depth configurable" \
 "Parameterize StraightThroughQuantize with --latent-bit-depth (4/6/8/10), default 8 to match current behavior.
 
@@ -93,8 +96,9 @@ create_issue "$M2" "[image/lossy] Extend smoke test for bit-depth round-trip" \
 Ref: documentation/IMAGE_PIPELINE_ROADMAP.md, Milestone 2." "image"
 
 echo "== Milestone 3: Learned Upscaling =="
-M3=$(create_milestone "M3: Learned Upscaling" \
-"Add optional learned super-resolution to replace/augment BICUBIC-only upscaling. See documentation/IMAGE_PIPELINE_ROADMAP.md#milestone-3")
+M3="M3: Learned Upscaling"
+create_milestone "$M3" \
+"Add optional learned super-resolution to replace/augment BICUBIC-only upscaling. See documentation/IMAGE_PIPELINE_ROADMAP.md#milestone-3"
 create_issue "$M3" "[image/upscale] Design a minimal learned super-resolution head" \
 "Small residual CNN trained on the same degrade/upscale-factor pairs already produced by train_autoencoder_image_local.py's data pipeline.
 
@@ -117,8 +121,9 @@ create_issue "$M3" "[image/docs] Document the learned upscaling workflow end-to-
 Ref: documentation/IMAGE_PIPELINE_ROADMAP.md, Milestone 3." "image,docs"
 
 echo "== Milestone 4: Data Pipeline Robustness & Throughput =="
-M4=$(create_milestone "M4: Data Pipeline Robustness & Throughput" \
-"Resilient to messy real-world images; faster repeated local iteration. See documentation/IMAGE_PIPELINE_ROADMAP.md#milestone-4")
+M4="M4: Data Pipeline Robustness & Throughput"
+create_milestone "$M4" \
+"Resilient to messy real-world images; faster repeated local iteration. See documentation/IMAGE_PIPELINE_ROADMAP.md#milestone-4"
 create_issue "$M4" "[image/data] Add structured logging for skipped/corrupt images" \
 "Extend filter_paths_by_min_size (and add a decode-error guard) to record counts + sample reasons into split_info in the evaluation report.
 
@@ -137,8 +142,9 @@ create_issue "$M4" "[image/data] Surface degradation noise/interp config fully" 
 Ref: documentation/IMAGE_PIPELINE_ROADMAP.md, Milestone 4." "image,data-pipeline"
 
 echo "== Milestone 5: Reporting, Search & Docs Alignment =="
-M5=$(create_milestone "M5: Reporting, Search & Docs Alignment" \
-"Keep random search, docs, and reports in sync with M1-M4. See documentation/IMAGE_PIPELINE_ROADMAP.md#milestone-5")
+M5="M5: Reporting, Search & Docs Alignment"
+create_milestone "$M5" \
+"Keep random search, docs, and reports in sync with M1-M4. See documentation/IMAGE_PIPELINE_ROADMAP.md#milestone-5"
 create_issue "$M5" "[image/search] Extend image + image_lossy search spaces for new flags" \
 "Add bit-depth, rate-loss-mode, quant-noise-anneal, cache-dir toggles to random_search_hyperparams.py and documentation/random_search_profile.json.
 
