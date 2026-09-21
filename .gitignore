@@ -1,8 +1,12 @@
 
 /data
 /__pycache__
+__pycache__/
+*.pyc
 /archive
 /.idea
+/.venv
+.DS_Store
 *.tflite
 *.keras
 models/audio_full_run.log
