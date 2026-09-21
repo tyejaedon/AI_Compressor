@@ -1,0 +1,235 @@
+{
+  "sample_space": {
+    "image": {
+      "standard": {
+        "preset": "custom",
+        "block_size": [32, 48, 64, 96, 128],
+        "latent_dim": [64, 96, 128, 192, 256],
+        "model_base_filters": [32, 48, 64, 80],
+        "model_kernel_size": [3, 5],
+        "batch_size": [4, 6, 8],
+        "epochs": [6, 8, 12, 16, 20],
+        "lr": {
+          "log_uniform": [5e-05, 0.00032],
+          "round": 7
+        },
+        "train_patches_per_image": [2, 4, 6],
+        "upscale_factor": [1, 2],
+        "degrade_interp": ["bilinear", "bicubic"],
+        "target_output_jpeg_ratio": [1.3, 1.6, 1.8, 2.0],
+        "target_output_jpeg_quality": [88, 90, 92],
+        "target_output_jpeg_samples": [4, 8, 12]
+      },
+      "lossy": {
+        "preset": "custom",
+        "block_size": [32, 48, 64, 96, 128],
+        "latent_dim": [12, 16, 20, 24, 32],
+        "model_base_filters": [16, 24, 32, 40, 48],
+        "model_kernel_size": [3, 5],
+        "batch_size": [4, 6, 8],
+        "epochs": [8, 12, 16, 20, 24],
+        "lr": {
+          "log_uniform": [5e-05, 0.00032],
+          "round": 7
+        },
+        "rate_lambda": {
+          "log_uniform": [0.01, 0.08],
+          "round": 5
+        },
+        "jpeg_quality": [70, 76, 82, 88, 92],
+        "sample_count": [4, 6, 8, 12]
+      }
+    },
+    "audio": {
+      "preset": "custom",
+      "latent_dim": [160, 224, 320, 384, 512],
+      "model_base_filters": [32, 40, 48, 56],
+      "model_kernel_size": [3, 5, 7],
+      "batch_size": [8, 10, 12, 16],
+      "epochs": [6, 8, 10, 14, 18],
+      "lr": {
+        "log_uniform": [5e-05, 0.00025],
+        "round": 7
+      },
+      "clip_seconds": [0.5, 0.75, 1.0],
+      "target_snr_db": [70, 80, 90],
+      "loss_mse_weight": [0.45, 0.55, 0.65],
+      "loss_l1_weight": [0.05, 0.10, 0.15],
+      "loss_stft_weight": [0.25, 0.35, 0.45],
+      "loss_hard_weight": [1.0, 1.5, 2.0],
+      "loss_stft_power": [1.2, 1.5, 2.0]
+    },
+    "video": {
+      "preset": "custom",
+      "latent_dim": [192, 256, 320, 384, 512],
+      "model_base_filters": [16, 24, 32, 40],
+      "model_kernel_size": [3, 5],
+      "batch_size": [2, 3, 4],
+      "epochs": [6, 8, 12, 16, 20],
+      "lr": {
+        "log_uniform": [4e-05, 0.0002],
+        "round": 7
+      },
+      "frames": [4, 6, 8],
+      "height": [32, 48, 64],
+      "width": [32, 48, 64]
+    }
+  },
+  "fixed_resource_args": {
+    "image": {
+      "standard": {
+        "tiny": [
+          "--train-dir",
+          "data/cifar10 2/train",
+          "--val-dir",
+          "data/cifar10 2/val",
+          "--test-dir",
+          "data/cifar10 2/test",
+          "--real-only",
+          "--target-psnr",
+          "22",
+          "--no-export-tflite"
+        ],
+        "balanced": [
+          "--train-dir",
+          "data/cifar10 2/train",
+          "--val-dir",
+          "data/cifar10 2/val",
+          "--test-dir",
+          "data/cifar10 2/test",
+          "--real-only",
+          "--target-psnr",
+          "30",
+          "--no-export-tflite"
+        ]
+      },
+      "lossy": {
+        "tiny": [
+          "--train-dir",
+          "data/cifar10 2/train",
+          "--val-dir",
+          "data/cifar10 2/val",
+          "--test-dir",
+          "data/cifar10 2/test",
+          "--real-only",
+          "--target-psnr",
+          "22",
+          "--target-compression-ratio",
+          "0.90",
+          "--no-export-tflite"
+        ],
+        "balanced": [
+          "--train-dir",
+          "data/cifar10 2/train",
+          "--val-dir",
+          "data/cifar10 2/val",
+          "--test-dir",
+          "data/cifar10 2/test",
+          "--real-only",
+          "--target-psnr",
+          "30",
+          "--target-compression-ratio",
+          "0.85",
+          "--no-export-tflite"
+        ]
+      }
+    },
+    "audio": {
+      "tiny": [
+        "--data-dir",
+        "data/AudioData/ESC-50-master/audio",
+        "--real-file-limit",
+        "400",
+        "--target-snr-db",
+        "80",
+        "--no-export-tflite"
+      ],
+      "balanced": [
+        "--data-dir",
+        "data/AudioData/ESC-50-master/audio",
+        "--real-file-limit",
+        "1600",
+        "--target-snr-db",
+        "90",
+        "--no-export-tflite"
+      ]
+    },
+    "video": {
+      "tiny": [
+        "--data-dir",
+        "data/VIDEO DATA",
+        "--real-max-videos",
+        "4",
+        "--real-max-clips",
+        "220",
+        "--fps",
+        "10",
+        "--target-psnr",
+        "22",
+        "--no-export-tflite"
+      ],
+      "balanced": [
+        "--data-dir",
+        "data/VIDEO DATA",
+        "--real-max-videos",
+        "10",
+        "--real-max-clips",
+        "900",
+        "--fps",
+        "12",
+        "--target-psnr",
+        "30",
+        "--no-export-tflite"
+      ]
+    }
+  },
+  "summary_keys": {
+    "image": {
+      "standard": [
+        "block_size",
+        "latent_dim",
+        "model_base_filters",
+        "model_kernel_size",
+        "batch_size",
+        "epochs",
+        "lr",
+        "train_patches_per_image",
+        "upscale_factor",
+        "degrade_interp"
+      ],
+      "lossy": [
+        "block_size",
+        "latent_dim",
+        "model_base_filters",
+        "model_kernel_size",
+        "batch_size",
+        "epochs",
+        "lr",
+        "rate_lambda",
+        "jpeg_quality",
+        "sample_count"
+      ]
+    },
+    "audio": [
+      "latent_dim",
+      "model_base_filters",
+      "model_kernel_size",
+      "batch_size",
+      "epochs",
+      "lr",
+      "clip_seconds"
+    ],
+    "video": [
+      "latent_dim",
+      "model_base_filters",
+      "model_kernel_size",
+      "batch_size",
+      "epochs",
+      "lr",
+      "frames",
+      "height",
+      "width"
+    ]
+  }
+}
+

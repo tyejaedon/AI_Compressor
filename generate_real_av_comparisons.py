@@ -15,6 +15,9 @@ import tensorflow as tf
 from report_markdown import write_markdown_json_report
 
 
+VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v"}
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Generate real-data comparisons for audio/video models.")
     parser.add_argument(
@@ -39,7 +42,7 @@ def parse_args():
         "--video-dir",
         type=str,
         default="data/VIDEO DATA",
-        help="Directory with real MP4 files",
+        help="Directory with real video files (.mp4, .mov, .mkv, .avi, .webm, .m4v)",
     )
     parser.add_argument("--audio-count", type=int, default=6, help="Number of audio comparisons")
     parser.add_argument("--video-count", type=int, default=4, help="Number of video comparisons")
@@ -236,7 +239,7 @@ def generate_video_comparisons(args, run_dir, rng):
     model = tf.keras.models.load_model(args.video_model, compile=False)
     _, frames, height, width, _ = model.input_shape
 
-    paths = collect_files(args.video_dir, {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v"})
+    paths = collect_files(args.video_dir, VIDEO_EXTENSIONS)
     if not paths:
         return {"status": "skipped", "reason": "no_video_files"}
 
