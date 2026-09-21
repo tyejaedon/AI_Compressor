@@ -3,14 +3,14 @@
 
 import argparse
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
 
-from report_markdown import write_markdown_json_report
+from report_markdown import read_markdown_json_report, write_markdown_json_report
 
 
 def parse_args():
@@ -43,6 +43,37 @@ def parse_args():
         help="Output root directory",
     )
     return parser.parse_args()
+
+
+def _read_latent_dim_from_report(report_path):
+    payload = read_markdown_json_report(report_path)
+    if not payload:
+        return None
+    latent = payload.get("config", {}).get("latent_dim")
+    if isinstance(latent, int) and latent > 0:
+        return latent
+    return None
+
+
+def load_model_with_fallback(model_path):
+    model_path = Path(model_path)
+    try:
+        # Local trusted artifact; required for Lambda layers in some training runs.
+        return tf.keras.models.load_model(str(model_path), compile=False, safe_mode=False)
+    except Exception as err:
+        weights_path = model_path.with_name("production_model.weights.h5")
+        report_path = model_path.with_name("evaluation_report.md")
+        if not (weights_path.exists() and report_path.exists()):
+            raise err
+
+        from train_autoencoder_image_local import build_autoencoder
+
+        latent_dim = _read_latent_dim_from_report(report_path) or 256
+        model = build_autoencoder(latent_dim)
+        # Build variables before loading weights.
+        _ = model(tf.zeros((1, 96, 96, 3), dtype=tf.float32), training=False)
+        model.load_weights(str(weights_path))
+        return model
 
 
 def collect_images(root_dir):
@@ -99,10 +130,12 @@ def save_comparison(original, recon_small, recon_upscaled, title, out_path):
 def main():
     args = parse_args()
 
-    model = tf.keras.models.load_model(args.model, compile=False)
+    model = load_model_with_fallback(args.model)
     _, in_h, in_w, in_c = model.input_shape
     if in_c != 3:
         raise ValueError(f"Expected RGB model with 3 channels, got {model.input_shape}")
+
+    dynamic_spatial = in_h is None or in_w is None
 
     paths = collect_images(args.data_dir)
     if len(paths) == 0:
@@ -125,7 +158,13 @@ def main():
         orig_h = int(img.shape[0])
         orig_w = int(img.shape[1])
 
-        model_in = tf.image.resize(img, [in_h, in_w], method=tf.image.ResizeMethod.BILINEAR)
+        if dynamic_spatial:
+            # Feed full-resolution image directly when the model supports dynamic spatial dims.
+            model_in = img
+        else:
+            model_in = tf.image.resize(img, [in_h, in_w], method=tf.image.ResizeMethod.BILINEAR)
+        model_in_h = int(model_in.shape[0])
+        model_in_w = int(model_in.shape[1])
         pred = model.predict(model_in[tf.newaxis, ...], verbose=0)[0]
 
         target_w, target_h = target_size_keep_aspect(orig_w, orig_h, args.upscale_mode)
@@ -147,7 +186,7 @@ def main():
                 "source": path,
                 "name": Path(path).name,
                 "original_size": [orig_w, orig_h],
-                "model_input_size": [int(in_w), int(in_h)],
+                "model_input_size": [model_in_w, model_in_h],
                 "upscaled_size": [target_w, target_h],
                 "psnr_upscaled": psnr_up,
                 "upscaled_png": up_path,
@@ -156,7 +195,7 @@ def main():
         )
 
     report = {
-        "created_at": datetime.utcnow().isoformat() + "Z",
+        "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "model": args.model,
         "upscale_mode": args.upscale_mode,
         "output_dir": run_dir,

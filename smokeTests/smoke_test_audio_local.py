@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 def main():
-    root = Path(__file__).resolve().parent
+    root = Path(__file__).resolve().parent.parent
     cmd = [
         sys.executable,
         str(root / "train_autoencoder_audio_local.py"),
@@ -21,12 +21,11 @@ def main():
         "64",
         "--clip-seconds",
         "0.5",
-        "--train-samples",
-        "120",
-        "--val-samples",
-        "32",
-        "--test-samples",
-        "32",
+        "--data-dir",
+        str(root / "data" / "AudioData" / "ESC-50-master" / "audio"),
+        "--real-file-limit",
+        "64",
+        "--no-export-tflite",
         "--output-root",
         str(root / "models" / "audio_smoke"),
     ]

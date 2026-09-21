@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 def main():
-    root = Path(__file__).resolve().parent
+    root = Path(__file__).resolve().parent.parent
     cmd = [
         sys.executable,
         str(root / "train_autoencoder_video_local.py"),
@@ -25,12 +25,13 @@ def main():
         "48",
         "--width",
         "48",
-        "--train-samples",
-        "60",
-        "--val-samples",
-        "16",
-        "--test-samples",
-        "16",
+        "--data-dir",
+        str(root / "data" / "VIDEO DATA"),
+        "--real-max-videos",
+        "3",
+        "--real-max-clips",
+        "120",
+        "--no-export-tflite",
         "--output-root",
         str(root / "models" / "video_smoke"),
     ]

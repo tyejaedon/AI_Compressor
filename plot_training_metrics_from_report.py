@@ -46,6 +46,8 @@ def _plot_pair(ax, history: dict, train_key: str, val_key: str, title: str) -> N
     ax.grid(True, alpha=0.3)
     if train_vals or val_vals:
         ax.legend()
+    else:
+        ax.text(0.5, 0.5, "No series", ha="center", va="center", transform=ax.transAxes)
 
 
 def _first_available_pair(history: dict, candidates: list[tuple[str, str, str]]) -> tuple[str, str, str] | None:
@@ -63,10 +65,9 @@ def main() -> None:
         raise RuntimeError(f"Could not parse report payload: {report_path}")
 
     history = payload.get("history", {})
-    if not isinstance(history, dict) or not history:
-        raise RuntimeError(f"No 'history' section found in report: {report_path}")
+    history = history if isinstance(history, dict) else {}
 
-    out_path = Path(args.output) if args.output else report_path.with_name("video_training_view_metrics.png")
+    out_path = Path(args.output) if args.output else report_path.with_name("training_view_metrics.png")
 
     fig, axes = plt.subplots(2, 3, figsize=(15, 8))
 
@@ -92,6 +93,8 @@ def main() -> None:
     lr = _float_series(history, "learning_rate")
     if lr:
         axes[1, 1].plot(range(1, len(lr) + 1), lr, color="tab:purple", linewidth=2)
+    else:
+        axes[1, 1].text(0.5, 0.5, "No series", ha="center", va="center", transform=axes[1, 1].transAxes)
     axes[1, 1].set_title("Learning Rate")
     axes[1, 1].set_xlabel("Epoch")
     axes[1, 1].grid(True, alpha=0.3)
@@ -115,6 +118,8 @@ def main() -> None:
         f"psnr_metric: {tm.get('psnr_metric', '-')}",
         f"{quality_name}: {quality_summary}",
     ]
+    if not history:
+        lines.append("history: missing")
     axes[1, 2].text(0.02, 0.98, "\n".join(lines), va="top", ha="left", fontsize=10)
 
     fig.suptitle("Training View Metrics", fontsize=14)

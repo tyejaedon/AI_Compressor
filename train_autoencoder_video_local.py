@@ -6,6 +6,7 @@ import math
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,34 +14,45 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
-from tensorflow.keras import Model, callbacks, layers
+from tensorflow.keras import Model, callbacks, layers, regularizers
 
+from param_overrides import apply_overrides, load_overrides
 from report_markdown import write_markdown_json_report
+
+
+VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v"}
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Train a video autoencoder locally.")
     parser.add_argument("--output-root", type=str, default="models/video_local_run", help="Output directory for artifacts")
+    parser.add_argument("--params-file", type=str, default="", help="Optional JSON file with parameter overrides")
     parser.add_argument("--preset", type=str, default="m1-air-balanced", choices=["m1-air-fast", "m1-air-balanced", "m1-air-quality", "custom"])
     parser.add_argument("--frames", type=int, default=8, help="Frames per clip")
     parser.add_argument("--height", type=int, default=64, help="Frame height")
     parser.add_argument("--width", type=int, default=64, help="Frame width")
     parser.add_argument("--fps", type=int, default=12, help="Frame rate")
     parser.add_argument("--latent-dim", type=int, default=256, help="Latent bottleneck size")
+    parser.add_argument("--model-base-filters", type=int, default=32, help="Base Conv3D filter count for video encoder/decoder")
+    parser.add_argument("--model-kernel-size", type=int, default=3, help="Kernel size used in core Conv3D blocks")
+    parser.add_argument("--latent-l1", type=float, default=0.0, help="Optional L1 activity penalty on bottleneck (compression pressure)")
+    parser.add_argument("--latent-l2", type=float, default=0.0, help="Optional L2 activity penalty on bottleneck (compression pressure)")
+    parser.add_argument("--latent-bits", type=int, default=16, help="Assumed quantized bits per latent dimension for compression-ratio estimate")
     parser.add_argument("--batch-size", type=int, default=6, help="Batch size")
     parser.add_argument("--epochs", type=int, default=24, help="Epoch count")
     parser.add_argument("--lr", type=float, default=1.2e-4, help="Learning rate")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
-    parser.add_argument("--data-dir", type=str, default="data/VIDEO DATA", help="Directory with real video files")
+    parser.add_argument(
+        "--data-dir",
+        type=str,
+        default="data/VIDEO DATA",
+        help="Directory with real video files (.mp4, .mov, .mkv, .avi, .webm, .m4v)",
+    )
     parser.add_argument("--real-val-ratio", type=float, default=0.15, help="Validation split ratio for real clips")
     parser.add_argument("--real-test-ratio", type=float, default=0.15, help="Test split ratio for real clips")
     parser.add_argument("--real-max-videos", type=int, default=0, help="Optional cap for discovered real videos (0 = all)")
     parser.add_argument("--real-max-clips", type=int, default=1800, help="Cap for extracted real clips to keep training practical")
     parser.add_argument("--real-clip-stride", type=int, default=4, help="Frame stride between extracted clips")
-    parser.add_argument("--synthetic-only", action="store_true", help="Disable real-data loading and force synthetic generation")
-    parser.add_argument("--train-samples", type=int, default=8000, help="Synthetic train sample count")
-    parser.add_argument("--val-samples", type=int, default=1200, help="Synthetic validation sample count")
-    parser.add_argument("--test-samples", type=int, default=1200, help="Synthetic test sample count")
     parser.add_argument("--target-psnr", type=float, default=25.0, help="Validation PSNR target")
     parser.add_argument("--export-tflite", dest="export_tflite", action="store_true", help="Export .tflite model")
     parser.add_argument("--no-export-tflite", dest="export_tflite", action="store_false", help="Disable .tflite export")
@@ -52,85 +64,23 @@ def parse_args():
 
 def apply_preset(args):
     preset_map = {
-        "m1-air-fast": {"batch_size": 4, "latent_dim": 224, "epochs": 14, "lr": 1.8e-4},
-        "m1-air-balanced": {"batch_size": 4, "latent_dim": 288, "epochs": 24, "lr": 1.2e-4},
-        "m1-air-quality": {"batch_size": 3, "latent_dim": 384, "epochs": 36, "lr": 8e-5},
+        "m1-air-fast": {"batch_size": 4, "latent_dim": 128, "epochs": 14, "lr": 1.8e-4},
+        "m1-air-balanced": {"batch_size": 4, "latent_dim": 160, "epochs": 24, "lr": 1.2e-4},
+        "m1-air-quality": {"batch_size": 3, "latent_dim": 224, "epochs": 36, "lr": 8e-5},
     }
     if args.preset in preset_map:
         for k, v in preset_map[args.preset].items():
             setattr(args, k, v)
+    args.model_base_filters = max(8, int(args.model_base_filters))
+    args.model_kernel_size = max(1, int(args.model_kernel_size))
     return args
 
 
-def synth_video_clip(frames, height, width, rng):
-    clip = np.zeros((frames, height, width, 3), dtype=np.float32)
-
-    base_color = rng.uniform(0.15, 0.85, size=(3,)).astype(np.float32)
-    obj_color = rng.uniform(0.2, 1.0, size=(3,)).astype(np.float32)
-
-    grid_x = np.linspace(0.0, 1.0, width, dtype=np.float32)
-    grid_y = np.linspace(0.0, 1.0, height, dtype=np.float32)
-    xx, yy = np.meshgrid(grid_x, grid_y)
-
-    start_x = rng.integers(0, max(1, width // 3))
-    start_y = rng.integers(0, max(1, height // 3))
-    vel_x = rng.choice([-2, -1, 1, 2])
-    vel_y = rng.choice([-2, -1, 1, 2])
-    box_w = rng.integers(max(6, width // 8), max(8, width // 3))
-    box_h = rng.integers(max(6, height // 8), max(8, height // 3))
-
-    for t in range(frames):
-        phase = t / max(frames - 1, 1)
-        bg = np.stack(
-            [
-                base_color[0] * (0.6 + 0.4 * xx),
-                base_color[1] * (0.6 + 0.4 * yy),
-                base_color[2] * (0.7 + 0.3 * np.sin((xx + yy + phase) * np.pi)),
-            ],
-            axis=-1,
-        )
-
-        x0 = int(np.clip(start_x + vel_x * t, 0, width - box_w))
-        y0 = int(np.clip(start_y + vel_y * t, 0, height - box_h))
-
-        frame = bg
-        frame[y0 : y0 + box_h, x0 : x0 + box_w, :] = obj_color * (0.7 + 0.3 * phase)
-
-        noise = rng.normal(0.0, 0.01, size=(height, width, 3)).astype(np.float32)
-        clip[t] = np.clip(frame + noise, 0.0, 1.0)
-
-    return clip.astype(np.float32)
-
-
-def build_dataset(frames, height, width, sample_count, batch_size, seed, shuffle, repeat=False):
-    rng = np.random.default_rng(seed)
-
-    def gen():
-        for _ in range(sample_count):
-            clip = synth_video_clip(frames, height, width, rng)
-            yield clip, clip
-
-    ds = tf.data.Dataset.from_generator(
-        gen,
-        output_signature=(
-            tf.TensorSpec(shape=(frames, height, width, 3), dtype=tf.float32),
-            tf.TensorSpec(shape=(frames, height, width, 3), dtype=tf.float32),
-        ),
-    )
-    if shuffle:
-        ds = ds.shuffle(buffer_size=min(sample_count, 2048), seed=seed, reshuffle_each_iteration=True)
-    if repeat:
-        # Keep input stream available across epochs when fit/evaluate uses explicit step counts.
-        ds = ds.repeat()
-    return ds.batch(batch_size).prefetch(tf.data.AUTOTUNE)
-
-
 def collect_video_paths(root_dir):
-    exts = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v"}
     root = Path(root_dir)
     if not root.exists():
         return np.array([], dtype=np.str_)
-    paths = [str(p) for p in root.rglob("*") if p.is_file() and p.suffix.lower() in exts]
+    paths = [str(p) for p in root.rglob("*") if p.is_file() and p.suffix.lower() in VIDEO_EXTENSIONS]
     return np.array(sorted(paths), dtype=np.str_)
 
 
@@ -196,14 +146,13 @@ def split_indices(n, val_ratio, test_ratio, rng):
 def extract_real_video_clips(args):
     ffmpeg_bin = resolve_ffmpeg_binary()
     if not isinstance(ffmpeg_bin, str) or not ffmpeg_bin:
-        print("[!] ffmpeg not found (system or imageio-ffmpeg); skipping real video loading.")
-        return None
+        raise ValueError("ffmpeg not found (system or imageio-ffmpeg); real video loading is required.")
 
     video_paths = collect_video_paths(args.data_dir)
     if args.real_max_videos > 0:
         video_paths = video_paths[: args.real_max_videos]
     if len(video_paths) == 0:
-        return None
+        raise ValueError(f"No supported video files found in '{args.data_dir}'.")
 
     clips = []
     stride = max(1, int(args.real_clip_stride))
@@ -222,7 +171,9 @@ def extract_real_video_clips(args):
             break
 
     if len(clips) < 3:
-        return None
+        raise ValueError(
+            f"Need at least 3 extracted clips for train/val/test splits; got {len(clips)} from '{args.data_dir}'."
+        )
     return np.asarray(clips, dtype=np.float32)
 
 
@@ -237,8 +188,6 @@ def make_dataset_from_clips(clips, batch_size, seed, shuffle, repeat=False):
 
 def build_real_video_datasets(args):
     clips = extract_real_video_clips(args)
-    if clips is None:
-        return None
 
     rng = np.random.default_rng(args.seed)
     train_idx, val_idx, test_idx = split_indices(len(clips), args.real_val_ratio, args.real_test_ratio, rng)
@@ -276,37 +225,53 @@ def ssim_metric(y_true, y_pred):
     return tf.reduce_mean(tf.image.ssim(y_true_flat, y_pred_flat, max_val=1.0))
 
 
-def build_video_autoencoder(frames, height, width, latent_dim):
+def build_video_autoencoder(
+    frames,
+    height,
+    width,
+    latent_dim,
+    latent_l1=0.0,
+    latent_l2=0.0,
+    model_base_filters=32,
+    model_kernel_size=3,
+):
     inputs = layers.Input(shape=(frames, height, width, 3))
+    base_filters = max(8, int(model_base_filters))
+    kernel_size = (max(1, int(model_kernel_size)),) * 3
+    stage2_filters = max(base_filters * 2, base_filters + 8)
+    stage3_filters = max(base_filters * 4, stage2_filters + 8)
 
-    e1 = layers.Conv3D(32, (3, 3, 3), strides=(1, 2, 2), padding="same", activation="relu")(inputs)
-    e1 = layers.Conv3D(32, (3, 3, 3), padding="same", activation="relu")(e1)
+    e1 = layers.Conv3D(base_filters, kernel_size, strides=(1, 2, 2), padding="same", activation="relu")(inputs)
+    e1 = layers.Conv3D(base_filters, kernel_size, padding="same", activation="relu")(e1)
 
-    e2 = layers.Conv3D(64, (3, 3, 3), strides=(2, 2, 2), padding="same", activation="relu")(e1)
-    e2 = layers.Conv3D(64, (3, 3, 3), padding="same", activation="relu")(e2)
+    e2 = layers.Conv3D(stage2_filters, kernel_size, strides=(2, 2, 2), padding="same", activation="relu")(e1)
+    e2 = layers.Conv3D(stage2_filters, kernel_size, padding="same", activation="relu")(e2)
 
-    b = layers.Conv3D(128, (3, 3, 3), strides=(1, 2, 2), padding="same", activation="relu")(e2)
-    b = layers.Conv3D(128, (3, 3, 3), padding="same", activation="relu")(b)
+    b = layers.Conv3D(stage3_filters, kernel_size, strides=(1, 2, 2), padding="same", activation="relu")(e2)
+    b = layers.Conv3D(stage3_filters, kernel_size, padding="same", activation="relu")(b)
 
     x = layers.GlobalAveragePooling3D()(b)
-    latent = layers.Dense(latent_dim, activation="relu", name="bottleneck")(x)
+    bottleneck_reg = None
+    if latent_l1 > 0.0 or latent_l2 > 0.0:
+        bottleneck_reg = regularizers.L1L2(l1=float(max(0.0, latent_l1)), l2=float(max(0.0, latent_l2)))
+    latent = layers.Dense(latent_dim, activation="relu", name="bottleneck", activity_regularizer=bottleneck_reg)(x)
 
     t_down = max(1, frames // 2)
     h_down = max(1, height // 8)
     w_down = max(1, width // 8)
 
-    x = layers.Dense(t_down * h_down * w_down * 128, activation="relu")(latent)
-    x = layers.Reshape((t_down, h_down, w_down, 128))(x)
+    x = layers.Dense(t_down * h_down * w_down * stage3_filters, activation="relu")(latent)
+    x = layers.Reshape((t_down, h_down, w_down, stage3_filters))(x)
 
     x = layers.UpSampling3D(size=(1, 2, 2))(x)
     x = layers.Concatenate()([x, e2])
-    x = layers.Conv3D(128, (3, 3, 3), padding="same", activation="relu")(x)
+    x = layers.Conv3D(stage3_filters, kernel_size, padding="same", activation="relu")(x)
     x = layers.UpSampling3D(size=(2, 2, 2))(x)
     x = layers.Concatenate()([x, e1])
-    x = layers.Conv3D(64, (3, 3, 3), padding="same", activation="relu")(x)
+    x = layers.Conv3D(stage2_filters, kernel_size, padding="same", activation="relu")(x)
     x = layers.UpSampling3D(size=(1, 2, 2))(x)
-    x = layers.Conv3D(32, (3, 3, 3), padding="same", activation="relu")(x)
-    outputs = layers.Conv3D(3, (3, 3, 3), padding="same", activation="sigmoid")(x)
+    x = layers.Conv3D(base_filters, kernel_size, padding="same", activation="relu")(x)
+    outputs = layers.Conv3D(3, kernel_size, padding="same", activation="sigmoid")(x)
 
     return Model(inputs, outputs, name="video_autoencoder")
 
@@ -328,14 +293,44 @@ class TargetPSNRCallback(callbacks.Callback):
 
 
 def export_tflite_model(model, run_dir, use_fp16=False):
+    os.makedirs(run_dir, exist_ok=True)
     tflite_path = os.path.join(run_dir, "video_autoencoder.tflite")
-    converter = tf.lite.TFLiteConverter.from_keras_model(model)
-    if use_fp16:
-        converter.optimizations = [tf.lite.Optimize.DEFAULT]
-        converter.target_spec.supported_types = [tf.float16]
-    tflite_model = converter.convert()
-    with open(tflite_path, "wb") as f:
-        f.write(tflite_model)
+    with tempfile.TemporaryDirectory(prefix="video_tflite_export_") as tmp_dir:
+        saved_model_dir = os.path.join(tmp_dir, "saved_model")
+        helper_path = os.path.join(tmp_dir, "convert_tflite.py")
+        if hasattr(model, "export"):
+            model.export(saved_model_dir)
+        else:
+            tf.saved_model.save(model, saved_model_dir)
+
+        helper_code = """
+import sys
+import tensorflow as tf
+
+saved_model_dir, output_tflite, fp16_flag = sys.argv[1], sys.argv[2], sys.argv[3] == "1"
+converter = tf.lite.TFLiteConverter.from_saved_model(saved_model_dir)
+if fp16_flag:
+    converter.optimizations = [tf.lite.Optimize.DEFAULT]
+    converter.target_spec.supported_types = [tf.float16]
+tflite_model = converter.convert()
+with open(output_tflite, "wb") as f:
+    f.write(tflite_model)
+""".strip()
+        with open(helper_path, "w", encoding="utf-8") as f:
+            f.write(helper_code)
+
+        env = os.environ.copy()
+        env.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
+        proc = subprocess.run(
+            [sys.executable, helper_path, saved_model_dir, tflite_path, "1" if use_fp16 else "0"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+        )
+        if proc.returncode != 0:
+            tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-8:]
+            raise RuntimeError("TFLite converter subprocess failed: " + " | ".join(tail))
     return tflite_path
 
 
@@ -497,7 +492,17 @@ def run_mp4_benchmark(model, test_data, run_dir, fps):
     return report_path
 
 
-def save_report(args, history, eval_values, run_dir, preview_path, benchmark_path):
+def estimate_video_compression_ratio(frames, height, width, latent_dim, latent_bits):
+    input_bits = int(frames) * int(height) * int(width) * 3 * 8
+    latent_bits_total = max(1, int(latent_dim) * int(max(1, latent_bits)))
+    return {
+        "input_bits_per_clip": int(input_bits),
+        "latent_bits_per_clip": int(latent_bits_total),
+        "estimated_input_to_latent_ratio": float(input_bits / latent_bits_total),
+    }
+
+
+def save_report(args, history, eval_values, run_dir, preview_path, benchmark_path, compression_estimate):
     payload = {
         "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "config": vars(args),
@@ -505,6 +510,7 @@ def save_report(args, history, eval_values, run_dir, preview_path, benchmark_pat
         "test_metrics": {k: float(v) for k, v in eval_values.items()},
         "preview": preview_path,
         "benchmark": benchmark_path,
+        "compression_estimate": compression_estimate,
     }
     report_path = os.path.join(run_dir, "video_evaluation_report.md")
     write_markdown_json_report(payload, report_path, title="Video Evaluation Report")
@@ -518,6 +524,14 @@ def configure_runtime(seed):
 
 def main():
     args = apply_preset(parse_args())
+    if args.params_file:
+        override_result = apply_overrides(args, load_overrides(args.params_file, section="video"))
+        if override_result.applied:
+            print(f"[*] Applied {len(override_result.applied)} params from {args.params_file}")
+        if override_result.unknown:
+            print(f"[!] Ignored unknown params in file: {sorted(override_result.unknown)}")
+    args.model_base_filters = max(8, int(args.model_base_filters))
+    args.model_kernel_size = max(1, int(args.model_kernel_size))
     configure_runtime(args.seed)
 
     if args.height % 8 != 0 or args.width % 8 != 0:
@@ -528,23 +542,22 @@ def main():
     run_dir = os.path.join(args.output_root, datetime.now().strftime("%Y%m%d_%H%M%S"))
     os.makedirs(run_dir, exist_ok=True)
 
-    real_data = None if args.synthetic_only else build_real_video_datasets(args)
-    if real_data is not None:
-        train_data, val_data, test_data, counts = real_data
-        print(f"[*] Using real video clips from '{args.data_dir}' (train={counts['train']}, val={counts['val']}, test={counts['test']})")
-        steps_per_epoch = max(1, math.ceil(counts["train"] / args.batch_size))
-        val_steps = max(1, math.ceil(counts["val"] / args.batch_size))
-        test_steps = max(1, math.ceil(counts["test"] / args.batch_size))
-    else:
-        print("[!] Real video clips not found or disabled; falling back to synthetic generation.")
-        train_data = build_dataset(args.frames, args.height, args.width, args.train_samples, args.batch_size, args.seed, shuffle=True, repeat=True)
-        val_data = build_dataset(args.frames, args.height, args.width, args.val_samples, args.batch_size, args.seed + 1, shuffle=False, repeat=True)
-        test_data = build_dataset(args.frames, args.height, args.width, args.test_samples, args.batch_size, args.seed + 2, shuffle=False, repeat=True)
-        steps_per_epoch = max(1, math.ceil(args.train_samples / args.batch_size))
-        val_steps = max(1, math.ceil(args.val_samples / args.batch_size))
-        test_steps = max(1, math.ceil(args.test_samples / args.batch_size))
+    train_data, val_data, test_data, counts = build_real_video_datasets(args)
+    print(f"[*] Using real video clips from '{args.data_dir}' (train={counts['train']}, val={counts['val']}, test={counts['test']})")
+    steps_per_epoch = max(1, math.ceil(counts["train"] / args.batch_size))
+    val_steps = max(1, math.ceil(counts["val"] / args.batch_size))
+    test_steps = max(1, math.ceil(counts["test"] / args.batch_size))
 
-    model = build_video_autoencoder(args.frames, args.height, args.width, args.latent_dim)
+    model = build_video_autoencoder(
+        args.frames,
+        args.height,
+        args.width,
+        args.latent_dim,
+        latent_l1=args.latent_l1,
+        latent_l2=args.latent_l2,
+        model_base_filters=args.model_base_filters,
+        model_kernel_size=args.model_kernel_size,
+    )
     model.compile(
         optimizer=tf.keras.optimizers.Adam(learning_rate=args.lr),
         loss=video_loss,
@@ -581,15 +594,20 @@ def main():
 
     tflite_path = None
     if args.export_tflite:
-        tflite_path = export_tflite_model(model, run_dir, use_fp16=args.tflite_fp16)
+        try:
+            tflite_path = export_tflite_model(model, run_dir, use_fp16=args.tflite_fp16)
+        except Exception as exc:
+            print(f"[!] TFLite export skipped: {exc}")
 
-    report_path = save_report(args, history, eval_values, run_dir, preview_path, benchmark_path)
+    compression_estimate = estimate_video_compression_ratio(args.frames, args.height, args.width, args.latent_dim, args.latent_bits)
+    report_path = save_report(args, history, eval_values, run_dir, preview_path, benchmark_path, compression_estimate)
 
     print("\n[+] Video training complete")
     print(f"[+] Weights: {weights_path}")
     print(f"[+] Report: {report_path}")
     print(f"[+] Preview: {preview_path}")
     print(f"[+] Test PSNR: {float(eval_values.get('psnr_metric', float('nan'))):.3f}")
+    print(f"[+] Estimated input/latent ratio: {compression_estimate['estimated_input_to_latent_ratio']:.2f}x")
     if float(eval_values.get("psnr_metric", 0.0)) < args.target_psnr:
         print(f"[!] PSNR target not reached yet (target={args.target_psnr:.1f}).")
     if tflite_path:

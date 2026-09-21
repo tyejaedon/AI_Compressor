@@ -1,0 +1,59 @@
+{
+  "image": {
+    "preset": "custom",
+    "block_size": 32,
+    "degrade_interp": "bicubic",
+    "upscale_factor": 1,
+    "train_patches_per_image": 6,
+    "target_output_jpeg_ratio": 1.8,
+    "target_output_jpeg_quality": 90,
+    "target_output_jpeg_samples": 8,
+    "latent_dim": 64,
+    "model_base_filters": 32,
+    "model_kernel_size": 3,
+    "batch_size": 4,
+    "epochs": 20,
+    "lr": 0.0001529
+  },
+  "image_lossy": {
+    "preset": "custom",
+    "block_size": 128,
+    "latent_dim": 32,
+    "model_base_filters": 32,
+    "model_kernel_size": 5,
+    "batch_size": 6,
+    "epochs": 16,
+    "lr": 0.0001,
+    "rate_lambda": 0.02,
+    "jpeg_quality": 88
+  },
+  "audio": {
+    "preset": "custom",
+    "latent_dim": 320,
+    "model_base_filters": 48,
+    "model_kernel_size": 7,
+    "batch_size": 10,
+    "epochs": 18,
+    "lr": 8e-05,
+    "clip_seconds": 1.0,
+    "target_snr_db": 90.0,
+    "loss_mse_weight": 0.55,
+    "loss_l1_weight": 0.1,
+    "loss_stft_weight": 0.35,
+    "loss_hard_weight": 1.5,
+    "loss_stft_power": 1.5
+  },
+  "video": {
+    "preset": "custom",
+    "latent_dim": 320,
+    "model_base_filters": 24,
+    "model_kernel_size": 5,
+    "batch_size": 3,
+    "epochs": 12,
+    "lr": 8e-05,
+    "frames": 8,
+    "height": 64,
+    "width": 64
+  }
+}
+
