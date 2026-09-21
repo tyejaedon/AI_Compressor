@@ -9,14 +9,14 @@ trainer), `train_autoencoder_image_lossy_local.py` (rate-distortion trainer),
 
 ## 1. Current state (as of this roadmap)
 
-| Area | Today |
-|---|---|
-| Lossless trainer | Residual, pooling-free CNN (4 enc conv + 1×1 bottleneck + 4 dec conv), edge/SSIM/L1/MSE composite loss, dynamic-resolution inference, `--upscale-factor` + `--degrade-interp` simulate low-res input, `TargetPSNRCallback` + `TargetOutputJpegRatioCallback` for early stop. |
-| Lossy trainer | Strided conv encoder/decoder (16× spatial reduction), `StraightThroughQuantize` (naive round-to-8-bit) + `RatePenalty` (mean |latent| heuristic, not real bitrate), JPEG/WebP matched-PSNR baseline benchmark. |
-| Upscaling | `upscale_reconstructed_images.py` is **classic BICUBIC only** — no learned super-resolution model. |
-| Compression accounting | "Compression ratio" is measured indirectly via re-encoded JPEG/WebP byte size of the *reconstruction*, not the actual latent bitstream. No entropy coder exists for the latent tensor itself. |
-| Data pipeline | Recursive file discovery, patch/center-crop extraction, CIFAR-10 fallback, explicit train/val/test dirs, `--real-only` no-leakage mode. Single-threaded Python-side decode + `tf.data.AUTOTUNE`, no TFRecord caching. |
-| Search & docs | `random_search_hyperparams.py` samples both trainers' hyperparameters; `--params-file` JSON convention is shared and documented in `documentation/MODEL_PARAMS_INPUT.md`. |
+| Area                   | Today                                                                                                                                                                                                                                                                        |
+|------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Lossless trainer       | Residual, pooling-free CNN (4 enc conv + 1×1 bottleneck + 4 dec conv), edge/SSIM/L1/MSE composite loss, dynamic-resolution inference, `--upscale-factor` + `--degrade-interp` simulate low-res input, `TargetPSNRCallback` + `TargetOutputJpegRatioCallback` for early stop. |
+| Lossy trainer          | Strided conv encoder/decoder (16× spatial reduction), `StraightThroughQuantize` (naive round-to-8-bit) + `RatePenalty` (mean                                                                                                                                                 |latent| heuristic, not real bitrate), JPEG/WebP matched-PSNR baseline benchmark. |
+| Upscaling              | `upscale_reconstructed_images.py` is **classic BICUBIC only** — no learned super-resolution model.                                                                                                                                                                           |
+| Compression accounting | "Compression ratio" is measured indirectly via re-encoded JPEG/WebP byte size of the *reconstruction*, not the actual latent bitstream. No entropy coder exists for the latent tensor itself.                                                                                |
+| Data pipeline          | Recursive file discovery, patch/center-crop extraction, CIFAR-10 fallback, explicit train/val/test dirs, `--real-only` no-leakage mode. Single-threaded Python-side decode + `tf.data.AUTOTUNE`, no TFRecord caching.                                                        |
+| Search & docs          | `random_search_hyperparams.py` samples both trainers' hyperparameters; `--params-file` JSON convention is shared and documented in `documentation/MODEL_PARAMS_INPUT.md`.                                                                                                    |
 
 ## 2. Constraints (do not violate)
 
