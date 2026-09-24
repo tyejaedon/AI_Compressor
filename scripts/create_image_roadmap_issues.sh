@@ -88,7 +88,7 @@ create_issue "$M2" "[image/lossy] Add random-search sweep profile for bit-depth 
 
 Ref: documentation/IMAGE_PIPELINE_ROADMAP.md, Milestone 2." "image,search"
 create_issue "$M2" "[image/lossy] Extend smoke test for bit-depth round-trip" \
-"Add assertion to smokeTests/smoke_test_image_lossy_local.py that quantized latents read back losslessly at the chosen bit-depth.
+"Add assertion to tests/smoke/smoke_test_image_lossy_local.py that quantized latents read back losslessly at the chosen bit-depth.
 
 Ref: documentation/IMAGE_PIPELINE_ROADMAP.md, Milestone 2." "image"
 
@@ -96,14 +96,14 @@ echo "== Milestone 3: Learned Upscaling =="
 M3=$(create_milestone "M3: Learned Upscaling" \
 "Add optional learned super-resolution to replace/augment BICUBIC-only upscaling. See documentation/IMAGE_PIPELINE_ROADMAP.md#milestone-3")
 create_issue "$M3" "[image/upscale] Design a minimal learned super-resolution head" \
-"Small residual CNN trained on the same degrade/upscale-factor pairs already produced by train_autoencoder_image_local.py's data pipeline.
+"Small residual CNN trained on the same degrade/upscale-factor pairs already produced by src/training/train_autoencoder_image_local.py's data pipeline.
 
 Ref: documentation/IMAGE_PIPELINE_ROADMAP.md, Milestone 3." "image,upscaling"
 create_issue "$M3" "[image/upscale] Add train_upscaler_image_local.py trainer script" \
 "Mirror existing trainer conventions (--preset, --params-file, smoke-testable), output its own evaluation_report.md.
 
 Ref: documentation/IMAGE_PIPELINE_ROADMAP.md, Milestone 3." "image,upscaling"
-create_issue "$M3" "[image/upscale] Wire --upscaler-mode learned into upscale_reconstructed_images.py" \
+create_issue "$M3" "[image/upscale] Wire --upscaler-mode learned into src/reporting/upscale_reconstructed_images.py" \
 "Falls back to BICUBIC if no learned model path is given; --upscaler-mode bicubic stays default.
 
 Ref: documentation/IMAGE_PIPELINE_ROADMAP.md, Milestone 3." "image,upscaling"
@@ -112,7 +112,7 @@ create_issue "$M3" "[image/upscale] Add tiling support for large-image inference
 
 Ref: documentation/IMAGE_PIPELINE_ROADMAP.md, Milestone 3." "image,upscaling"
 create_issue "$M3" "[image/docs] Document the learned upscaling workflow end-to-end" \
-"README section + smokeTests/smoke_test_upscaler_local.py.
+"README section + tests/smoke/smoke_test_upscaler_local.py.
 
 Ref: documentation/IMAGE_PIPELINE_ROADMAP.md, Milestone 3." "image,docs"
 
@@ -140,7 +140,7 @@ echo "== Milestone 5: Reporting, Search & Docs Alignment =="
 M5=$(create_milestone "M5: Reporting, Search & Docs Alignment" \
 "Keep random search, docs, and reports in sync with M1-M4. See documentation/IMAGE_PIPELINE_ROADMAP.md#milestone-5")
 create_issue "$M5" "[image/search] Extend image + image_lossy search spaces for new flags" \
-"Add bit-depth, rate-loss-mode, quant-noise-anneal, cache-dir toggles to random_search_hyperparams.py and documentation/random_search_profile.json.
+"Add bit-depth, rate-loss-mode, quant-noise-anneal, cache-dir toggles to src/training/random_search_hyperparams.py and documentation/random_search_profile.json.
 
 Ref: documentation/IMAGE_PIPELINE_ROADMAP.md, Milestone 5." "image,search"
 create_issue "$M5" "[image/docs] Full CLI flag audit for both image trainers" \
@@ -148,10 +148,10 @@ create_issue "$M5" "[image/docs] Full CLI flag audit for both image trainers" \
 
 Ref: documentation/IMAGE_PIPELINE_ROADMAP.md, Milestone 5." "image,docs"
 create_issue "$M5" "[image/reporting] Add a compression-ratio/PSNR frontier plot" \
-"Extend plot_training_metrics_from_report.py / generate_master_report.py to chart rate-distortion tradeoff across trials.
+"Extend src/reporting/plot_training_metrics_from_report.py / src/reporting/generate_master_report.py to chart rate-distortion tradeoff across trials.
 
 Ref: documentation/IMAGE_PIPELINE_ROADMAP.md, Milestone 5." "image"
-create_issue "$M5" "[image/pipeline] Sync run_full_production_pipeline.py with renamed/added flags" \
+create_issue "$M5" "[image/pipeline] Sync src/pipeline/run_full_production_pipeline.py with renamed/added flags" \
 "Verify end-to-end pipeline still runs after Milestones 1-4 land.
 
 Ref: documentation/IMAGE_PIPELINE_ROADMAP.md, Milestone 5." "image"

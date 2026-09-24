@@ -23,7 +23,7 @@ def write_test_wav(path: Path, sample_rate: int = 22050, seconds: float = 0.4) -
 
 
 def main():
-    project_root = Path(__file__).resolve().parent.parent
+    project_root = Path(__file__).resolve().parent.parent.parent
     input_root = project_root / "models" / "smoke_test_prepare_audio_dataset" / "input"
     output_root = project_root / "models" / "smoke_test_prepare_audio_dataset" / "output"
 
@@ -31,7 +31,7 @@ def main():
 
     cmd = [
         sys.executable,
-        str(project_root / "prepare_audio_dataset.py"),
+        str(project_root / "src" / "audio" / "prepare_audio_dataset.py"),
         "--input-dir",
         str(input_root),
         "--output-dir",

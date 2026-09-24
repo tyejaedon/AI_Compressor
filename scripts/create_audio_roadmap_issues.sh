@@ -82,11 +82,11 @@ create_issue "$A2" "[audio/streaming] Design a chunked/overlap-add inference wra
 
 Ref: documentation/AUDIO_PIPELINE_ROADMAP.md, Milestone A2." "audio,streaming"
 create_issue "$A2" "[audio/streaming] Add realtime_audio_compression_pipeline.py" \
-"Mirrors realtime_audio_vortex_pipeline.py's streaming buffer conventions but decodes/encodes through the trained model instead of extracting FFT features.
+"Mirrors src/audio/realtime_audio_vortex_pipeline.py's streaming buffer conventions but decodes/encodes through the trained model instead of extracting FFT features.
 
 Ref: documentation/AUDIO_PIPELINE_ROADMAP.md, Milestone A2." "audio,streaming"
 create_issue "$A2" "[audio/streaming] Add a smoke test for streaming inference" \
-"smokeTests/smoke_test_realtime_audio_compression.py: tiny model + short synthetic stream, assert output shape/latency bounds.
+"tests/smoke/smoke_test_realtime_audio_compression.py: tiny model + short synthetic stream, assert output shape/latency bounds.
 
 Ref: documentation/AUDIO_PIPELINE_ROADMAP.md, Milestone A2." "audio,streaming"
 create_issue "$A2" "[audio/docs] Document the real-time compression path and its relationship to the vortex demo" \
@@ -141,7 +141,7 @@ A5="A5: Reporting, Search & Docs Alignment"
 create_milestone "$A5" \
 "Keep random search, docs, and reports in sync with A1-A4. See documentation/AUDIO_PIPELINE_ROADMAP.md#milestone-a5"
 create_issue "$A5" "[audio/search] Extend audio search space for new flags" \
-"bit-depth, loss-profile, resample-method added to random_search_hyperparams.py and documentation/random_search_profile.json.
+"bit-depth, loss-profile, resample-method added to src/training/random_search_hyperparams.py and documentation/random_search_profile.json.
 
 Ref: documentation/AUDIO_PIPELINE_ROADMAP.md, Milestone A5." "audio,search"
 create_issue "$A5" "[audio/docs] Full CLI flag audit for the audio trainer" \
@@ -149,10 +149,10 @@ create_issue "$A5" "[audio/docs] Full CLI flag audit for the audio trainer" \
 
 Ref: documentation/AUDIO_PIPELINE_ROADMAP.md, Milestone A5." "audio,docs"
 create_issue "$A5" "[audio/reporting] Add a compression-ratio/SNR frontier plot" \
-"Extend plot_training_metrics_from_report.py / generate_master_report.py.
+"Extend src/reporting/plot_training_metrics_from_report.py / src/reporting/generate_master_report.py.
 
 Ref: documentation/AUDIO_PIPELINE_ROADMAP.md, Milestone A5." "audio"
-create_issue "$A5" "[audio/pipeline] Sync run_full_production_pipeline.py with any renamed/added audio flags" \
+create_issue "$A5" "[audio/pipeline] Sync src/pipeline/run_full_production_pipeline.py with any renamed/added audio flags" \
 "Verify end-to-end pipeline still runs after Milestones A1-A4 land.
 
 Ref: documentation/AUDIO_PIPELINE_ROADMAP.md, Milestone A5." "audio"

@@ -7,12 +7,12 @@ from pathlib import Path
 
 
 def main():
-    project_root = Path(__file__).resolve().parent.parent
+    project_root = Path(__file__).resolve().parent.parent.parent
     output_root = project_root / "models" / "smoke_test"
 
     cmd = [
         sys.executable,
-        str(project_root / "train_autoencoder_image_local.py"),
+        str(project_root / "src" / "training" / "train_autoencoder_image_local.py"),
         "--preset",
         "custom",
         "--data-dir",

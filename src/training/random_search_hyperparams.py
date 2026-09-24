@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "reporting"))
 from report_markdown import read_markdown_json_report
 
 
@@ -495,9 +496,10 @@ def main() -> None:
         print("[!] --image-trainer is only used with --modality image; proceeding with modality defaults.")
     rng = random.Random(args.seed)
 
-    project_root = Path(__file__).resolve().parent
+    script_dir = Path(__file__).resolve().parent
+    project_root = script_dir.parent.parent
     search_config, search_config_path = load_search_config(project_root, args.search_config)
-    script_path = project_root / modality_to_script(args.modality, args.image_trainer)
+    script_path = script_dir / modality_to_script(args.modality, args.image_trainer)
     report_name = modality_to_report_name(args.modality)
 
     if not script_path.exists():

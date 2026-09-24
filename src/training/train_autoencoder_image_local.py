@@ -15,6 +15,7 @@ from tensorflow.keras import Model, callbacks, layers
 from param_overrides import apply_overrides, load_overrides
 
 # Keep your local custom report writer intact
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "reporting"))
 try:
     from report_markdown import write_markdown_json_report
 except ImportError:

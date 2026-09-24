@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """Smoke test for realtime audio vortex pipeline."""
 
+import sys
+from pathlib import Path
+
 import numpy as np
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "src" / "audio"))
 from realtime_audio_vortex_pipeline import RealtimeAudioVortexPipeline
 
 

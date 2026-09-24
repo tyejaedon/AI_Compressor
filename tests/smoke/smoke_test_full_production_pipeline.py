@@ -7,10 +7,10 @@ from pathlib import Path
 
 
 def main() -> None:
-    project_root = Path(__file__).resolve().parent.parent
+    project_root = Path(__file__).resolve().parent.parent.parent
     cmd = [
         sys.executable,
-        str(project_root / "run_full_production_pipeline.py"),
+        str(project_root / "src" / "pipeline" / "run_full_production_pipeline.py"),
         "--dry-run",
         "--trials-image-standard",
         "2",

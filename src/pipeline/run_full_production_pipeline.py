@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "reporting"))
 from report_markdown import read_markdown_json_report, write_markdown_json_report
 
 
@@ -50,7 +51,7 @@ class StageResult:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run full production pipeline for CIFAR image and ESC-50 audio models.")
-    parser.add_argument("--project-root", type=Path, default=Path(__file__).resolve().parent)
+    parser.add_argument("--project-root", type=Path, default=Path(__file__).resolve().parent.parent.parent)
     parser.add_argument("--python", type=str, default=sys.executable)
 
     parser.add_argument("--search-config", type=str, default="documentation/random_search_profile.json")
@@ -156,7 +157,7 @@ def run_search_for_stage(
 ) -> dict[str, Any]:
     cmd = [
         args.python,
-        "random_search_hyperparams.py",
+        "src/training/random_search_hyperparams.py",
         "--modality",
         "image" if stage in {"image_standard", "image_lossy"} else stage,
         "--resource-profile",
@@ -327,7 +328,7 @@ def main() -> int:
             project_root,
             train_root,
             "image_standard",
-            "train_autoencoder_image_local.py",
+            "src/training/train_autoencoder_image_local.py",
             search_params["image_standard"],
             {
                 "preset": "custom",
@@ -346,7 +347,7 @@ def main() -> int:
             project_root,
             train_root,
             "image_lossy",
-            "train_autoencoder_image_lossy_local.py",
+            "src/training/train_autoencoder_image_lossy_local.py",
             search_params["image_lossy"],
             {
                 "preset": "custom",
@@ -365,7 +366,7 @@ def main() -> int:
             project_root,
             train_root,
             "audio",
-            "train_autoencoder_audio_local.py",
+            "src/training/train_autoencoder_audio_local.py",
             search_params["audio"],
             {
                 "preset": "custom",
@@ -383,7 +384,7 @@ def main() -> int:
                 project_root,
                 train_root,
                 "video",
-                "train_autoencoder_video_local.py",
+                "src/training/train_autoencoder_video_local.py",
                 search_params["video"],
                 {
                     "preset": "custom",
