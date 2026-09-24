@@ -76,51 +76,69 @@ For easier model configuration, all autoencoder trainers now support `--params-f
 Train image:
 
 ```zsh
-python train_autoencoder_image_local.py --preset m1-air-balanced --data-dir data --output-root models/local_run
+python src/training/train_autoencoder_image_local.py --preset m1-air-balanced --data-dir data --output-root models/local_run
 ```
 
 Train image on real data only (crop-based patch expansion, no dummy fallback):
 
 ```zsh
-python train_autoencoder_image_local.py --preset m1-air-quality --data-dir data/ImageData --real-only --train-patches-per-image 6 --upscale-factor 2 --degrade-interp bicubic --target-psnr 60 --output-root models/image_real_only
+python src/training/train_autoencoder_image_local.py --preset m1-air-quality --data-dir data/ImageData --real-only --train-patches-per-image 6 --upscale-factor 2 --degrade-interp bicubic --target-psnr 60 --output-root models/image_real_only
 ```
 
 Train image with explicit split folders and external holdout (no split leakage):
 
 ```zsh
-python train_autoencoder_image_local.py --preset custom --train-dir "data/cifar10 2/train" --val-dir "data/cifar10 2/val" --test-dir "data/cifar10 2/test" --holdout-dir data/ImageData --real-only --disable-target-psnr-stop --target-psnr 50 --epochs 20 --batch-size 8 --block-size 64 --train-patches-per-image 2 --upscale-factor 2 --degrade-interp bicubic --output-root models/image_explicit_split
+python src/training/train_autoencoder_image_local.py --preset custom --train-dir "data/cifar10 2/train" --val-dir "data/cifar10 2/val" --test-dir "data/cifar10 2/test" --holdout-dir data/ImageData --real-only --disable-target-psnr-stop --target-psnr 50 --epochs 20 --batch-size 8 --block-size 64 --train-patches-per-image 2 --upscale-factor 2 --degrade-interp bicubic --output-root models/image_explicit_split
 ```
 
 Train image (lossy + file-size focused):
 
 ```zsh
-python train_autoencoder_image_lossy_local.py --preset custom --train-dir "data/cifar10 2/train" --val-dir "data/cifar10 2/val" --test-dir "data/cifar10 2/test" --real-only --epochs 28 --batch-size 8 --block-size 96 --latent-dim 64 --rate-lambda 0.006 --jpeg-quality 88 --target-compression-ratio 0.85 --output-root models/image_lossy_local_run
+python src/training/train_autoencoder_image_lossy_local.py --preset custom --train-dir "data/cifar10 2/train" --val-dir "data/cifar10 2/val" --test-dir "data/cifar10 2/test" --real-only --epochs 28 --batch-size 8 --block-size 96 --latent-dim 64 --rate-lambda 0.006 --jpeg-quality 88 --target-compression-ratio 0.85 --output-root models/image_lossy_local_run
 ```
 
 Train image (lossy, less aggressive, real-data-only):
 
 ```zsh
-python train_autoencoder_image_lossy_local.py --preset custom --train-dir "data/cifar10 2/train" --val-dir "data/cifar10 2/val" --test-dir "data/cifar10 2/test" --real-only --epochs 40 --batch-size 6 --block-size 128 --latent-dim 96 --rate-lambda 0.004 --sample-count 32 --jpeg-quality 90 --target-compression-ratio 0.80 --output-root models/image_lossy_real_only
+python src/training/train_autoencoder_image_lossy_local.py --preset custom --train-dir "data/cifar10 2/train" --val-dir "data/cifar10 2/val" --test-dir "data/cifar10 2/test" --real-only --epochs 40 --batch-size 6 --block-size 128 --latent-dim 96 --rate-lambda 0.004 --sample-count 32 --jpeg-quality 90 --target-compression-ratio 0.80 --output-root models/image_lossy_real_only
 ```
 
 The lossy trainer writes matched-PSNR JPEG/WebP baseline benchmark stats into `evaluation_report.md` by default. Disable with `--no-run-baseline-benchmark`.
 
+Train image (lossy, real latent bitrate + entropy coding + QAT bit-depth, see `documentation/MODEL_PARAMS_INPUT.md`):
+
+```zsh
+python src/training/train_autoencoder_image_lossy_local.py --preset custom --use-cifar10 --epochs 20 --batch-size 8 --block-size 64 --latent-dim 48 --rate-loss-mode entropy --latent-bit-depth 6 --quant-noise-anneal --enable-entropy-coding --output-root models/image_lossy_entropy_run
+```
+
+Train a learned image upscaler (Milestone 3; see `documentation/MODEL_PARAMS_INPUT.md`):
+
+```zsh
+python src/training/train_upscaler_image_local.py --preset m1-air-balanced --use-cifar10 --output-root models/upscaler_local_run
+```
+
+Use the learned upscaler in place of BICUBIC when upscaling reconstructions:
+
+```zsh
+python src/reporting/upscale_reconstructed_images.py --model models/local_run/<run>/best_model.keras --upscaler-mode learned --learned-upscaler-model models/upscaler_local_run/<run>/best_model.keras --data-dir data/ImageData
+```
+
 Train audio:
 
 ```zsh
-python train_autoencoder_audio_local.py --preset m1-air-balanced --output-root models/audio_local_run
+python src/training/train_autoencoder_audio_local.py --preset m1-air-balanced --output-root models/audio_local_run
 ```
 
 Prepare canonical audio dataset (mp3/flac/ogg/wav -> mono PCM16 WAV + metadata):
 
 ```zsh
-python prepare_audio_dataset.py --input-dir data/AudioData --output-dir data/AudioData_canonical --target-sample-rate 16000 --output-format wav --normalization rms_peak --target-rms 0.12 --target-peak 0.95 --remove-dc
+python src/audio/prepare_audio_dataset.py --input-dir data/AudioData --output-dir data/AudioData_canonical --target-sample-rate 16000 --output-format wav --normalization rms_peak --target-rms 0.12 --target-peak 0.95 --remove-dc
 ```
 
 Train video:
 
 ```zsh
-python train_autoencoder_video_local.py --preset m1-air-balanced --output-root models/video_local_run
+python src/training/train_autoencoder_video_local.py --preset m1-air-balanced --output-root models/video_local_run
 ```
 
 Supported real-video extensions for training/comparisons: `.mp4`, `.mov`, `.mkv`, `.avi`, `.webm`, `.m4v`.
@@ -128,15 +146,15 @@ Supported real-video extensions for training/comparisons: `.mp4`, `.mov`, `.mkv`
 Generate real audio/video comparison panels:
 
 ```zsh
-python generate_real_av_comparisons.py --audio-dir data/AudioData/ESC-50-master/audio --video-dir "data/VIDEO DATA"
+python src/reporting/generate_real_av_comparisons.py --audio-dir data/AudioData/ESC-50-master/audio --video-dir "data/VIDEO DATA"
 ```
 
 Run constrained random search:
 
 ```zsh
-python random_search_hyperparams.py --modality image --resource-profile tiny --trials 10 --max-minutes 25
-python random_search_hyperparams.py --modality image --image-trainer lossy --resource-profile tiny --trials 10 --max-minutes 25
-python random_search_hyperparams.py --modality audio --resource-profile balanced --trials 12 --search-config documentation/random_search_profile.json
+python src/training/random_search_hyperparams.py --modality image --resource-profile tiny --trials 10 --max-minutes 25
+python src/training/random_search_hyperparams.py --modality image --image-trainer lossy --resource-profile tiny --trials 10 --max-minutes 25
+python src/training/random_search_hyperparams.py --modality audio --resource-profile balanced --trials 12 --search-config documentation/random_search_profile.json
 ```
 
 Random-search spaces/fixed args can be centrally edited in `documentation/random_search_profile.json` (see `documentation/RANDOM_SEARCH_PROFILE.md`).
@@ -144,17 +162,18 @@ Random-search spaces/fixed args can be centrally edited in `documentation/random
 Run full production pipeline (search -> train image upscaler/lossy/audio -> bundle -> optional prune):
 
 ```zsh
-python run_full_production_pipeline.py --trials-image-standard 10 --trials-image-lossy 10 --trials-audio 8
-python run_full_production_pipeline.py --trials-image-standard 10 --trials-image-lossy 10 --trials-audio 8 --apply-prune
+python src/pipeline/run_full_production_pipeline.py --trials-image-standard 10 --trials-image-lossy 10 --trials-audio 8
+python src/pipeline/run_full_production_pipeline.py --trials-image-standard 10 --trials-image-lossy 10 --trials-audio 8 --apply-prune
 ```
 
 Smoke test:
 
 ```zsh
-python smokeTests/smoke_test_random_search.py
-python smokeTests/smoke_test_image_lossy_local.py
-python smokeTests/smoke_test_prepare_audio_dataset.py
-python smokeTests/smoke_test_full_production_pipeline.py
+python tests/smoke/smoke_test_random_search.py
+python tests/smoke/smoke_test_image_lossy_local.py
+python tests/smoke/smoke_test_upscaler_local.py
+python tests/smoke/smoke_test_prepare_audio_dataset.py
+python tests/smoke/smoke_test_full_production_pipeline.py
 ```
 
 ## Outputs

@@ -2,9 +2,9 @@
 
 Status: Draft v1 · Owner: video modality · Companion to `AGENT.md` / `CONTRIBUTING.md`
 
-This roadmap targets `train_autoencoder_video_local.py`, video-related paths in
-`generate_real_av_comparisons.py`, and the video paths in
-`random_search_hyperparams.py` / `param_overrides.py`.
+This roadmap targets `src/training/train_autoencoder_video_local.py`, video-related paths in
+`src/reporting/generate_real_av_comparisons.py`, and the video paths in
+`src/training/random_search_hyperparams.py` / `src/training/param_overrides.py`.
 
 ## 1. Current state (as of this roadmap)
 
@@ -17,14 +17,14 @@ This roadmap targets `train_autoencoder_video_local.py`, video-related paths in
 | Loss/metrics | Hardcoded `0.75*MSE + 0.15*L1 + 0.10*SSIM` (not configurable via CLI, unlike the image trainer's `--loss-profile`); tracks MSE/PSNR/SSIM per-frame. `TargetPSNRCallback` early-stops at `--target-psnr` (default 25.0). |
 | Cost profile | Explicitly called out in `README.md` as "the most expensive path and highly sensitive to clip shape" — smallest presets use `batch_size=3-4`, `epochs<=36`, tiny frame/resolution smoke test (6 frames, 48×48). |
 | Robustness | No corrupted/variable-framerate video handling beyond a broad try/except that silently skips a file; no dynamic resolution (height/width must be divisible by 8, frames by 2); no real data fallback (raises immediately if no videos found). |
-| Search & docs | `random_search_hyperparams.py` samples latent_dim/filters/kernel/batch/epochs/lr/frames/height/width for video; ranks by `psnr_metric`. `--params-file` JSON `video` section documented in `documentation/MODEL_PARAMS_INPUT.md`. |
+| Search & docs | `src/training/random_search_hyperparams.py` samples latent_dim/filters/kernel/batch/epochs/lr/frames/height/width for video; ranks by `psnr_metric`. `--params-file` JSON `video` section documented in `documentation/MODEL_PARAMS_INPUT.md`. |
 
 ## 2. Constraints (do not violate)
 
 1. **Laptop-only (M1) compute** — video is already the most compute/thermal-constrained modality; every milestone needs a tiny/smoke-testable path (few clips, small resolution, 1 epoch).
 2. **Frozen preset defaults** (`m1-air-fast/balanced/quality`) tied to `README.md` benchmark numbers — changes must be called out explicitly.
-3. **CI stays lightweight** — no training/data-dependent jobs in CI; validate via `smokeTests/smoke_test_video_local.py` locally.
-4. **No package refactor** — stay within the flat CLI-script structure.
+3. **CI stays lightweight** — no training/data-dependent jobs in CI; validate via `tests/smoke/smoke_test_video_local.py` locally.
+4. **No installable-package refactor** — scripts live under `src/{training,pipeline,reporting,audio}/` for discoverability but remain plain CLI scripts (`python src/.../script.py`), not an installable package.
 5. **Backward-compatible CLI** — new flags default to reproducing current behavior.
 6. **Clip-shape sensitivity** — any new feature must not silently change the frames/8-divisibility or height/width/8-divisibility constraints without explicit opt-in.
 
@@ -83,15 +83,15 @@ Issues:
 4. **[video/docs] Document the new loss/benchmark flags in README and MODEL_PARAMS_INPUT.md.**
 
 ### Milestone V5 — Reporting, Search & Docs Alignment
-**Objective:** Keep `random_search_hyperparams.py`, `documentation/*.md`, and evaluation reports consistent with V1–V4 as they land.
+**Objective:** Keep `src/training/random_search_hyperparams.py`, `documentation/*.md`, and evaluation reports consistent with V1–V4 as they land.
 **Why:** Every milestone above adds flags/metrics; without this milestone docs and search spaces drift.
 **Exit criteria:** Random search can sweep any new axis (bit-depth, temporal-mode, loss-profile, decode-workers) behind explicit toggles; docs enumerate every new flag.
 
 Issues:
-1. **[video/search] Extend video search space for new flags** — bit-depth, temporal-mode, loss-profile added to `random_search_hyperparams.py` and `documentation/random_search_profile.json`.
+1. **[video/search] Extend video search space for new flags** — bit-depth, temporal-mode, loss-profile added to `src/training/random_search_hyperparams.py` and `documentation/random_search_profile.json`.
 2. **[video/docs] Full CLI flag audit for the video trainer.**
-3. **[video/reporting] Add a compression-ratio/PSNR frontier plot for video trials** — extend `plot_training_metrics_from_report.py` / `generate_master_report.py`.
-4. **[video/pipeline] Sync `run_full_production_pipeline.py` with any renamed/added video flags.**
+3. **[video/reporting] Add a compression-ratio/PSNR frontier plot for video trials** — extend `src/reporting/plot_training_metrics_from_report.py` / `src/reporting/generate_master_report.py`.
+4. **[video/pipeline] Sync `src/pipeline/run_full_production_pipeline.py` with any renamed/added video flags.**
 
 ## 5. Suggested sequencing
 

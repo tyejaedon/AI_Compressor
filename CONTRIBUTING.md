@@ -75,19 +75,35 @@ for `master`:
 Run the smoke test(s) relevant to what you changed:
 
 ```zsh
-python smokeTests/smoke_test_local.py
-python smokeTests/smoke_test_image_lossy_local.py
-python smokeTests/smoke_test_audio_local.py
-python smokeTests/smoke_test_video_local.py
-python smokeTests/smoke_test_random_search.py
-python smokeTests/smoke_test_full_production_pipeline.py
-python smokeTests/smoke_test_prepare_audio_dataset.py
-python smokeTests/smoke_test_vortex_pipeline.py
+python tests/smoke/smoke_test_local.py
+python tests/smoke/smoke_test_image_lossy_local.py
+python tests/smoke/smoke_test_upscaler_local.py
+python tests/smoke/smoke_test_audio_local.py
+python tests/smoke/smoke_test_video_local.py
+python tests/smoke/smoke_test_random_search.py
+python tests/smoke/smoke_test_full_production_pipeline.py
+python tests/smoke/smoke_test_prepare_audio_dataset.py
+python tests/smoke/smoke_test_vortex_pipeline.py
 ```
 
 CI does **not** run these (they require local datasets that aren't checked into
-git); CI only runs a fast syntax/import check. Manual smoke-test runs + reviewer
-sign-off are the real quality gate.
+git); CI runs a fast syntax/import check plus a no-data dry-run smoke job (random
+search `--dry-run`, `--help` sanity on every CLI entry point, and the vortex
+pipeline smoke test). Manual smoke-test runs + reviewer sign-off remain the real
+quality gate for data-dependent behavior.
+
+## CI/CD
+
+- `.github/workflows/ci.yml` — runs on every PR/push to `master`:
+  - `lint-and-compile`: byte-compiles all Python sources + non-blocking `ruff` lint.
+  - `smoke-dry-run`: installs `documentation/requirements.txt`, runs `--help` on
+    every trainer/pipeline/reporting CLI entry point (import + argparse sanity,
+    no data/training), plus the random-search dry-run and vortex pipeline smoke
+    tests (both data-free).
+- `.github/workflows/release.yml` — runs on `v*` tags: packages `README.md`,
+  `AGENT.md`, `CONTRIBUTING.md`, and `documentation/` into a docs bundle and cuts
+  a GitHub Release with auto-generated notes. There is no cloud training/deploy
+  target for this repo (see `AGENT.md`), so this is the extent of "CD" here.
 
 ## Repo hygiene
 

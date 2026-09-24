@@ -1,6 +1,6 @@
 # Random Search Profile
 
-`random_search_hyperparams.py` supports a centralized JSON profile that controls:
+`src/training/random_search_hyperparams.py` supports a centralized JSON profile that controls:
 
 - sampled hyperparameter spaces (`sample_space`)
 - fixed trainer arguments by modality/profile (`fixed_resource_args`)
@@ -13,14 +13,14 @@ Default profile path:
 ## Usage
 
 ```zsh
-python3 random_search_hyperparams.py --modality image --image-trainer standard --resource-profile tiny --trials 10
-python3 random_search_hyperparams.py --modality audio --resource-profile balanced --trials 12
+python3 src/training/random_search_hyperparams.py --modality image --image-trainer standard --resource-profile tiny --trials 10
+python3 src/training/random_search_hyperparams.py --modality audio --resource-profile balanced --trials 12
 ```
 
 Use a custom profile file:
 
 ```zsh
-python3 random_search_hyperparams.py --modality video --search-config documentation/random_search_profile.json --trials 8
+python3 src/training/random_search_hyperparams.py --modality video --search-config documentation/random_search_profile.json --trials 8
 ```
 
 ## Profile Schema (high level)

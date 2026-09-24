@@ -63,7 +63,7 @@ Common callback patterns used:
 
 Primary trainer:
 
-- `train_autoencoder_image_local.py`
+- `src/training/train_autoencoder_image_local.py`
 
 Current capabilities:
 
@@ -94,7 +94,7 @@ Important current behavior:
 
 Primary trainer:
 
-- `train_autoencoder_image_lossy_local.py`
+- `src/training/train_autoencoder_image_lossy_local.py`
 
 Current capabilities:
 
@@ -121,11 +121,11 @@ Known practical note:
 
 Primary trainer:
 
-- `train_autoencoder_audio_local.py`
+- `src/training/train_autoencoder_audio_local.py`
 
 Related prep utility:
 
-- `prepare_audio_dataset.py`
+- `src/audio/prepare_audio_dataset.py`
 
 Current capabilities:
 
@@ -147,7 +147,7 @@ Canonical dataset prep supports:
 
 Primary trainer:
 
-- `train_autoencoder_video_local.py`
+- `src/training/train_autoencoder_video_local.py`
 
 Current capabilities:
 
@@ -169,7 +169,7 @@ Notes:
 
 Bundle builder script:
 
-- `build_best_model_bundle.py`
+- `src/pipeline/build_best_model_bundle.py`
 
 Current bundle flow:
 
@@ -218,12 +218,12 @@ For each final candidate run:
 
 ## File Index (Key Entry Points)
 
-- `train_autoencoder_image_local.py`
-- `train_autoencoder_image_lossy_local.py`
-- `train_autoencoder_audio_local.py`
-- `train_autoencoder_video_local.py`
-- `prepare_audio_dataset.py`
-- `build_best_model_bundle.py`
+- `src/training/train_autoencoder_image_local.py`
+- `src/training/train_autoencoder_image_lossy_local.py`
+- `src/training/train_autoencoder_audio_local.py`
+- `src/training/train_autoencoder_video_local.py`
+- `src/audio/prepare_audio_dataset.py`
+- `src/pipeline/build_best_model_bundle.py`
 - `README.md`
 
 ---
