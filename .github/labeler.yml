@@ -1,0 +1,59 @@
+# Path-based auto-labeling config for actions/labeler (see .github/workflows/labeler.yml).
+# Label taxonomy matches CONTRIBUTING.md's "Issues & milestones" section:
+# image, audio, video, pipeline, docs, infra.
+
+image:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/training/train_autoencoder_image_local.py"
+          - "src/training/train_autoencoder_image_lossy_local.py"
+          - "src/training/train_upscaler_image_local.py"
+          - "tests/smoke/smoke_test_local.py"
+          - "tests/smoke/smoke_test_image_lossy_local.py"
+          - "tests/smoke/smoke_test_upscaler_local.py"
+          - "documentation/IMAGE_PIPELINE_ROADMAP.md"
+
+audio:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/audio/**"
+          - "src/training/train_autoencoder_audio_local.py"
+          - "tests/smoke/smoke_test_audio_local.py"
+          - "tests/smoke/smoke_test_prepare_audio_dataset.py"
+          - "tests/smoke/smoke_test_vortex_pipeline.py"
+          - "documentation/AUDIO_PIPELINE_ROADMAP.md"
+
+video:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/training/train_autoencoder_video_local.py"
+          - "tests/smoke/smoke_test_video_local.py"
+          - "documentation/VIDEO_PIPELINE_ROADMAP.md"
+
+pipeline:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/pipeline/**"
+          - "src/reporting/**"
+          - "src/training/train_all_optimal_m1.py"
+          - "src/training/random_search_hyperparams.py"
+          - "tests/smoke/smoke_test_full_production_pipeline.py"
+          - "tests/smoke/smoke_test_random_search.py"
+          - "run_image_then_full_all_models.sh"
+          - "documentation/RANDOM_SEARCH_PROFILE.md"
+          - "documentation/random_search_profile.json"
+
+docs:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "**/*.md"
+          - "documentation/**"
+
+infra:
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".github/**"
+          - "scripts/**"
+          - ".gitignore"
+          - "documentation/requirements.txt"
+
