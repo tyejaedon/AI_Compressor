@@ -1,8 +1,9 @@
 name: CI
 
-# Lightweight checks only: no model training, no dataset dependency.
-# Real validation happens locally via smokeTests/* and human PR review
-# (see CONTRIBUTING.md).
+# Lightweight checks only: no model training, no real-dataset dependency.
+# Full smoke tests (real data dirs) run locally via tests/smoke/* and human PR review
+# (see CONTRIBUTING.md). The jobs below add real-but-tiny sanity checks that don't
+# require any committed dataset (CIFAR-10-free argparse/import checks + dry-run search).
 
 on:
   pull_request:
@@ -33,4 +34,47 @@ jobs:
       - name: Ruff lint (non-blocking style check)
         run: |
           ruff check . --exit-zero
+
+  smoke-dry-run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: "pip"
+          cache-dependency-path: documentation/requirements.txt
+
+      - name: Install runtime dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r documentation/requirements.txt
+
+      - name: Trainer/tool --help sanity check (import + argparse only, no data/training)
+        run: |
+          set -e
+          for script in \
+            src/training/train_autoencoder_image_local.py \
+            src/training/train_autoencoder_image_lossy_local.py \
+            src/training/train_autoencoder_audio_local.py \
+            src/training/train_autoencoder_video_local.py \
+            src/training/train_all_optimal_m1.py \
+            src/training/random_search_hyperparams.py \
+            src/pipeline/run_full_production_pipeline.py \
+            src/pipeline/prune_keep_best_models.py \
+            src/pipeline/prune_models_keep_top2.py \
+            src/reporting/upscale_reconstructed_images.py \
+            src/audio/prepare_audio_dataset.py \
+          ; do
+            echo "[*] --help: $script"
+            python "$script" --help > /dev/null
+          done
+
+      - name: Random-search dry-run smoke test (no data, no training)
+        run: python tests/smoke/smoke_test_random_search.py
+
+      - name: Vortex pipeline smoke test (no data, no training)
+        run: python tests/smoke/smoke_test_vortex_pipeline.py
 
