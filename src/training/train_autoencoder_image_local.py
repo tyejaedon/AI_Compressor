@@ -2,6 +2,8 @@
 """Local MacBook-friendly image autoencoder trainer with Edge-Sharpening & Remaster Pipeline."""
 
 import argparse
+import json
+import logging
 import math
 import os
 import sys
@@ -13,6 +15,60 @@ import numpy as np
 import tensorflow as tf
 from tensorflow.keras import Model, callbacks, layers
 from param_overrides import apply_overrides, load_overrides
+
+# Structured logger for skipped/corrupt image records. A dedicated JSONL file
+# handler is attached per-run inside main() once run_dir is known; until then
+# records are still emitted to the console via the default StreamHandler.
+skipped_images_logger = logging.getLogger("ai_compressor.skipped_images")
+skipped_images_logger.setLevel(logging.INFO)
+if not skipped_images_logger.handlers:
+    _console_handler = logging.StreamHandler()
+    _console_handler.setFormatter(logging.Formatter("%(message)s"))
+    skipped_images_logger.addHandler(_console_handler)
+    skipped_images_logger.propagate = False
+
+
+class _JsonLinesFileHandler(logging.Handler):
+    """Writes each log record's structured payload as one JSON line."""
+
+    def __init__(self, log_path):
+        super().__init__()
+        self.log_path = log_path
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+
+    def emit(self, record):
+        payload = getattr(record, "structured", None)
+        if payload is None:
+            return
+        try:
+            with open(self.log_path, "a") as f:
+                f.write(json.dumps(payload) + "\n")
+        except Exception:
+            self.handleError(record)
+
+
+def attach_skipped_images_file_handler(run_dir):
+    """Attach a JSONL file handler for this run so skipped/corrupt image
+    records are persisted alongside other run artifacts."""
+    log_path = os.path.join(run_dir, "skipped_images.jsonl")
+    handler = _JsonLinesFileHandler(log_path)
+    skipped_images_logger.addHandler(handler)
+    return log_path
+
+
+def log_skipped_image(path, reason, detail=""):
+    """Emit a structured log record for a single skipped/corrupt image."""
+    payload = {
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "path": str(path),
+        "reason": reason,
+        "detail": str(detail),
+    }
+    skipped_images_logger.info(
+        f"[!] Skipped image ({reason}): {path} - {detail}",
+        extra={"structured": payload},
+    )
+    return payload
 
 # Keep your local custom report writer intact
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "reporting"))
@@ -190,9 +246,11 @@ def split_indices(n, val_ratio, test_ratio, rng):
 
 
 def filter_paths_by_min_size(paths, min_size):
+    """Filters image paths by minimum side length, logging a structured
+    record for every skipped image (undersized or unreadable/corrupt)."""
     min_side = max(1, int(min_size))
     kept = []
-    skipped = 0
+    skipped_records = []
     for path in paths:
         try:
             image_bytes = tf.io.read_file(path)
@@ -203,10 +261,12 @@ def filter_paths_by_min_size(paths, min_size):
             if h >= min_side and w >= min_side:
                 kept.append(str(path))
             else:
-                skipped += 1
-        except Exception:
-            skipped += 1
-    return np.array(kept, dtype=np.str_), skipped
+                skipped_records.append(
+                    log_skipped_image(path, "undersized", f"{w}x{h} < min_side={min_side}")
+                )
+        except Exception as exc:
+            skipped_records.append(log_skipped_image(path, "corrupt_or_unreadable", exc))
+    return np.array(kept, dtype=np.str_), skipped_records
 
 
 def detect_split_dirs(data_dir):
@@ -371,11 +431,14 @@ def build_explicit_split_datasets(args):
     train_paths, train_skipped = filter_paths_by_min_size(train_paths, args.block_size)
     val_paths, val_skipped = filter_paths_by_min_size(val_paths, args.block_size)
     test_paths, test_skipped = filter_paths_by_min_size(test_paths, args.block_size)
-    if train_skipped + val_skipped + test_skipped > 0:
+    all_skipped = train_skipped + val_skipped + test_skipped
+    if all_skipped:
+        undersized = sum(1 for r in all_skipped if r["reason"] == "undersized")
+        corrupt = sum(1 for r in all_skipped if r["reason"] == "corrupt_or_unreadable")
         print(
-            "[*] Dropped "
-            f"{train_skipped + val_skipped + test_skipped} images smaller than block-size={args.block_size} "
-            "to avoid synthetic SR targets."
+            f"[*] Dropped {len(all_skipped)} images "
+            f"(undersized={undersized}, corrupt/unreadable={corrupt}) below block-size={args.block_size}; "
+            "see skipped_images.jsonl for per-file detail."
         )
     if min(len(train_paths), len(val_paths), len(test_paths)) <= 0:
         raise ValueError(
@@ -428,6 +491,9 @@ def build_explicit_split_datasets(args):
             "train_images": int(len(train_paths)),
             "val_images": int(len(val_paths)),
             "test_images": int(len(test_paths)),
+            "skipped_images_count": int(len(all_skipped)),
+            "skipped_images_undersized": int(sum(1 for r in all_skipped if r["reason"] == "undersized")),
+            "skipped_images_corrupt": int(sum(1 for r in all_skipped if r["reason"] == "corrupt_or_unreadable")),
             "train_dir": args.train_dir,
             "val_dir": args.val_dir,
             "test_dir": args.test_dir,
@@ -470,12 +536,14 @@ def build_datasets(args):
     if args.real_file_limit > 0:
         image_paths = image_paths[: args.real_file_limit]
 
-    image_paths, skipped_small = filter_paths_by_min_size(image_paths, args.block_size)
-    if skipped_small > 0:
+    image_paths, skipped_records = filter_paths_by_min_size(image_paths, args.block_size)
+    if skipped_records:
+        undersized = sum(1 for r in skipped_records if r["reason"] == "undersized")
+        corrupt = sum(1 for r in skipped_records if r["reason"] == "corrupt_or_unreadable")
         print(
-            "[*] Dropped "
-            f"{skipped_small} images smaller than block-size={args.block_size} "
-            "to avoid synthetic SR targets."
+            f"[*] Dropped {len(skipped_records)} images "
+            f"(undersized={undersized}, corrupt/unreadable={corrupt}) below block-size={args.block_size}; "
+            "see skipped_images.jsonl for per-file detail."
         )
 
     if len(image_paths) >= 3:
@@ -526,6 +594,9 @@ def build_datasets(args):
                 "train_images": int(len(train_idx)),
                 "val_images": int(len(val_idx)),
                 "test_images": int(len(test_idx)),
+                "skipped_images_count": int(len(skipped_records)),
+                "skipped_images_undersized": int(sum(1 for r in skipped_records if r["reason"] == "undersized")),
+                "skipped_images_corrupt": int(sum(1 for r in skipped_records if r["reason"] == "corrupt_or_unreadable")),
                 "train_patches_per_image": int(max(1, int(args.train_patches_per_image))),
                 "block_size": int(args.block_size),
                 "upscale_factor": int(max(1, int(args.upscale_factor))),
@@ -936,6 +1007,7 @@ def main():
 
     run_dir = os.path.join(args.output_root, datetime.now().strftime("%Y%m%d_%H%M%S"))
     os.makedirs(run_dir, exist_ok=True)
+    skipped_images_log_path = attach_skipped_images_file_handler(run_dir)
 
     train_data, val_data, test_data, split_info = build_datasets(args)
 
@@ -1028,6 +1100,8 @@ def main():
     print(f"[+] Weights: {weights_path}")
     print(f"[+] Best model: {best_path}")
     print(f"[+] Report: {report_path}")
+    if split_info.get("skipped_images_count", 0) > 0 and os.path.exists(skipped_images_log_path):
+        print(f"[+] Skipped/corrupt images log: {skipped_images_log_path}")
     print(f"[+] Plot: {plot_path}")
     print(f"[+] Preview: {preview_path}")
     print(f"[+] Test PSNR: {float(eval_values.get('psnr_metric', float('nan'))):.3f}")
