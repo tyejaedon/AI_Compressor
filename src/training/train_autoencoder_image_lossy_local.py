@@ -16,17 +16,73 @@ import tensorflow as tf
 from tensorflow.keras import Model, callbacks, layers
 
 from param_overrides import apply_overrides, load_overrides
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "reporting"))
 from report_markdown import write_markdown_json_report
 
 
+@tf.keras.utils.register_keras_serializable(package="ai_compressor_lossy")
 class StraightThroughQuantize(layers.Layer):
-    """Round in forward pass while preserving gradients."""
+    """Round in forward pass while preserving gradients.
 
-    def call(self, inputs):
-        quantized = tf.round(inputs * 255.0) / 255.0
-        return inputs + tf.stop_gradient(quantized - inputs)
+    `bit_depth` controls how many discrete levels the latent is quantized to
+    (2**bit_depth levels, default 8 -> 256 levels, matching the original
+    hardcoded behavior). When `quant_noise_anneal` is enabled, additive uniform
+    noise scaled to one quantization step is mixed in during training only, and
+    faded from full strength to zero via `noise_scale` (updated externally by
+    `QuantNoiseAnnealCallback`) so the model gradually adapts to hard
+    quantization instead of encountering it as a step-function from epoch one.
+    """
+
+    def __init__(self, bit_depth=8, quant_noise_anneal=False, **kwargs):
+        super().__init__(**kwargs)
+        self.bit_depth = int(bit_depth)
+        self.levels = float((1 << self.bit_depth) - 1)
+        self.quant_noise_anneal = bool(quant_noise_anneal)
+        self.noise_scale = None
+        if self.quant_noise_anneal:
+            self.noise_scale = self.add_weight(
+                name="quant_noise_scale",
+                shape=(),
+                dtype=tf.float32,
+                initializer=tf.keras.initializers.Constant(1.0),
+                trainable=False,
+            )
+
+    def call(self, inputs, training=None):
+        quantized = tf.round(inputs * self.levels) / self.levels
+        ste = inputs + tf.stop_gradient(quantized - inputs)
+        if not self.quant_noise_anneal:
+            return ste
+        if not training:
+            return ste
+
+        step = 1.0 / self.levels
+        noise = tf.random.uniform(tf.shape(inputs), -0.5, 0.5, dtype=inputs.dtype) * step * self.noise_scale
+        return ste + noise
+
+    def get_config(self):
+        config = super().get_config()
+        config.update({"bit_depth": self.bit_depth, "quant_noise_anneal": self.quant_noise_anneal})
+        return config
 
 
+class QuantNoiseAnnealCallback(callbacks.Callback):
+    """Linearly fades a StraightThroughQuantize layer's noise_scale from 1 -> 0."""
+
+    def __init__(self, layer, total_epochs):
+        super().__init__()
+        self.layer = layer
+        self.total_epochs = max(1, int(total_epochs))
+
+    def on_epoch_begin(self, epoch, logs=None):
+        if self.layer.noise_scale is None:
+            return
+        frac = max(0.0, 1.0 - (epoch / self.total_epochs))
+        self.layer.noise_scale.assign(frac)
+
+
+@tf.keras.utils.register_keras_serializable(package="ai_compressor_lossy")
 class RatePenalty(layers.Layer):
     """Adds a latent magnitude penalty as a simple bitrate proxy."""
 
@@ -38,6 +94,54 @@ class RatePenalty(layers.Layer):
         rate_proxy = tf.reduce_mean(tf.abs(inputs))
         self.add_loss(self.weight * rate_proxy)
         return inputs
+
+    def get_config(self):
+        config = super().get_config()
+        config.update({"weight": self.weight})
+        return config
+
+
+@tf.keras.utils.register_keras_serializable(package="ai_compressor_lossy")
+class EntropyRatePenalty(layers.Layer):
+    """Differentiable soft-histogram entropy estimate of the latent distribution.
+
+    Bins the (already-quantized, in [0, 1]) latent values into `num_bins` soft
+    buckets using fixed-width Gaussian kernels, averages bucket occupancy across
+    the batch/spatial/channel axes to get an empirical probability distribution,
+    and adds `weight * entropy_bits` as the rate loss. Unlike the magnitude proxy
+    (mean |latent|), this actually approximates the Shannon entropy of the latent
+    values, which is what a real entropy coder's output size depends on.
+    """
+
+    def __init__(self, weight, num_bins=32, bandwidth=None, **kwargs):
+        super().__init__(**kwargs)
+        self.weight = float(weight)
+        self.num_bins = int(num_bins)
+        self.bandwidth = float(bandwidth) if bandwidth is not None else 1.0 / self.num_bins
+
+    def call(self, inputs):
+        bin_centers = tf.linspace(0.0, 1.0, self.num_bins)
+        bin_centers = tf.reshape(bin_centers, [1] * len(inputs.shape) + [self.num_bins])
+        values = tf.expand_dims(inputs, axis=-1)
+        # Gaussian kernel soft-assignment to bins; normalized so each value contributes total mass 1.
+        sq_dist = tf.square(values - bin_centers)
+        weights_unnorm = tf.exp(-0.5 * sq_dist / (self.bandwidth ** 2))
+        weights_norm = weights_unnorm / (tf.reduce_sum(weights_unnorm, axis=-1, keepdims=True) + 1e-12)
+
+        # Average occupancy per bin across all other axes -> empirical probability distribution.
+        reduce_axes = list(range(len(weights_norm.shape) - 1))
+        probs = tf.reduce_mean(weights_norm, axis=reduce_axes)
+        probs = probs / (tf.reduce_sum(probs) + 1e-12)
+
+        entropy_bits = -tf.reduce_sum(probs * tf.math.log(probs + 1e-12) / tf.math.log(2.0))
+        self.add_loss(self.weight * entropy_bits)
+        return inputs
+
+    def get_config(self):
+        config = super().get_config()
+        config.update({"weight": self.weight, "num_bins": self.num_bins, "bandwidth": self.bandwidth})
+        return config
+
 
 
 def parse_args():
@@ -86,6 +190,42 @@ def parse_args():
     parser.add_argument("--export-tflite", dest="export_tflite", action="store_true", help="Export Android-ready .tflite model")
     parser.add_argument("--no-export-tflite", dest="export_tflite", action="store_false", help="Disable TFLite export")
     parser.add_argument("--tflite-fp16", action="store_true", help="Use float16 optimization when exporting TFLite")
+    parser.add_argument(
+        "--rate-loss-mode",
+        type=str,
+        default="magnitude",
+        choices=["magnitude", "entropy"],
+        help="Rate loss formulation: 'magnitude' (default, preserves prior benchmarks) uses mean |latent| "
+        "(typical scale ~0-1, tune --rate-lambda around 1e-3 to 1e-1); "
+        "'entropy' uses a differentiable soft-histogram entropy estimate in bits (typical scale ~0-5+ for "
+        "32 bins, so --rate-lambda needs to be roughly 10-100x smaller than for 'magnitude', e.g. 1e-4 to 1e-3, "
+        "to avoid the rate term overwhelming reconstruction loss)",
+    )
+    parser.add_argument(
+        "--enable-entropy-coding",
+        action="store_true",
+        help="Prototype a real range/arithmetic coder over quantized test-set latents and report actual "
+        "compressed byte size (default off; adds a slow, sample-limited post-training step)",
+    )
+    parser.add_argument(
+        "--entropy-coding-samples",
+        type=int,
+        default=8,
+        help="Number of test images to actually range-encode when --enable-entropy-coding is set",
+    )
+    parser.add_argument(
+        "--latent-bit-depth",
+        type=int,
+        default=8,
+        choices=[4, 6, 8, 10],
+        help="Bit depth for latent quantization (2**N levels); default 8 preserves prior behavior",
+    )
+    parser.add_argument(
+        "--quant-noise-anneal",
+        action="store_true",
+        help="Fade additive quantization noise from full strength to zero over training (QAT-style annealing), "
+        "default off preserves prior straight-through-only behavior",
+    )
     parser.set_defaults(export_tflite=True, run_baseline_benchmark=True)
     return parser.parse_args()
 
@@ -293,7 +433,15 @@ def ssim_metric(y_true, y_pred):
     return tf.reduce_mean(tf.image.ssim(y_true, y_pred, max_val=1.0))
 
 
-def build_autoencoder(latent_dim, rate_lambda, model_base_filters=32, model_kernel_size=3):
+def build_autoencoder(
+    latent_dim,
+    rate_lambda,
+    model_base_filters=32,
+    model_kernel_size=3,
+    rate_loss_mode="magnitude",
+    latent_bit_depth=8,
+    quant_noise_anneal=False,
+):
     inputs = layers.Input(shape=(None, None, 3))
     base_filters = max(16, int(model_base_filters))
     kernel_size = max(1, int(model_kernel_size))
@@ -307,8 +455,15 @@ def build_autoencoder(latent_dim, rate_lambda, model_base_filters=32, model_kern
     x = layers.Conv2D(deep_filters, kernel_size, padding="same", activation="relu")(x)
 
     latent_pre = layers.Conv2D(latent_dim, 1, padding="same", activation="sigmoid", name="bottleneck_pre_quant")(x)
-    latent_quant = StraightThroughQuantize(name="bottleneck_quant")(latent_pre)
-    latent_penalized = RatePenalty(rate_lambda, name="rate_penalty")(latent_quant)
+    latent_quant = StraightThroughQuantize(
+        bit_depth=latent_bit_depth,
+        quant_noise_anneal=quant_noise_anneal,
+        name="bottleneck_quant",
+    )(latent_pre)
+    if rate_loss_mode == "entropy":
+        latent_penalized = EntropyRatePenalty(rate_lambda, name="rate_penalty")(latent_quant)
+    else:
+        latent_penalized = RatePenalty(rate_lambda, name="rate_penalty")(latent_quant)
 
     x = layers.Conv2D(deep_filters, kernel_size, padding="same", activation="relu")(latent_penalized)
     x = layers.Conv2DTranspose(mid_filters, kernel_size, strides=2, padding="same", activation="relu")(x)
@@ -319,6 +474,7 @@ def build_autoencoder(latent_dim, rate_lambda, model_base_filters=32, model_kern
     model = Model(inputs, outputs, name="image_lossy_autoencoder")
 
     return model
+
 
 
 class TargetPSNRCallback(callbacks.Callback):
@@ -366,6 +522,145 @@ def compute_batch_lossy_size_stats(images, preds, jpeg_quality):
         "mean_reconstructed_png_bytes": mean_recon_png,
         "recon_jpeg_vs_orig_jpeg_ratio": mean_recon_jpeg / max(mean_orig_jpeg, 1.0),
         "recon_png_vs_recon_jpeg_ratio": mean_recon_png / max(mean_recon_jpeg, 1.0),
+    }
+
+
+def get_latent_submodel(model):
+    """Build a Model that outputs the quantized latent tensor (post StraightThroughQuantize)."""
+    latent_layer = model.get_layer("bottleneck_quant")
+    return Model(model.input, latent_layer.output, name="latent_extractor")
+
+
+def compute_latent_entropy_stats(latent_batch, image_pixel_count, bit_depth=8):
+    """Empirical Shannon entropy of the quantized (2**bit_depth-level) latent tensor.
+
+    `latent_batch` holds per-image latents (batch, h, w, latent_dim) with values
+    already rounded to 1/(2**bit_depth - 1) steps by StraightThroughQuantize.
+    `image_pixel_count` is height*width of the *original* image (block_size**2)
+    used to normalize into bits-per-pixel so this is directly comparable to
+    JPEG/WebP bits-per-pixel.
+    """
+    num_levels = (1 << int(bit_depth))
+    max_level = num_levels - 1
+    levels = np.clip(np.round(np.asarray(latent_batch) * max_level), 0, max_level).astype(np.int64)
+    flat = levels.reshape(-1)
+    counts = np.bincount(flat, minlength=num_levels).astype(np.float64)
+    total = counts.sum()
+    if total <= 0:
+        return {
+            "latent_entropy_bits_per_symbol": 0.0,
+            "latent_symbols_per_image": 0,
+            "latent_bits_per_pixel": 0.0,
+            "estimated_bitstream_bytes_per_image": 0.0,
+        }
+    probs = counts[counts > 0] / total
+    entropy_bits_per_symbol = float(-np.sum(probs * np.log2(probs)))
+
+    symbols_per_image = int(np.prod(levels.shape[1:]))  # h * w * latent_dim
+    total_bits_per_image = entropy_bits_per_symbol * symbols_per_image
+    bits_per_pixel = total_bits_per_image / max(1, image_pixel_count)
+    bytes_per_image = total_bits_per_image / 8.0
+
+    return {
+        "latent_entropy_bits_per_symbol": entropy_bits_per_symbol,
+        "latent_symbols_per_image": symbols_per_image,
+        "latent_bits_per_pixel": bits_per_pixel,
+        "estimated_bitstream_bytes_per_image": bytes_per_image,
+    }
+
+
+class _StaticRangeEncoder:
+    """Minimal order-0 static-frequency range coder (32-bit, byte-oriented).
+
+    Prototype only: the frequency table is derived from the sample being encoded
+    and is *not* itself transmitted/counted here (a real deployment would need to
+    agree on or ship the model, e.g. via a fixed/learned entropy model). This
+    exists to demonstrate that the latent stream is genuinely compressible to
+    close to its empirical entropy, not just estimate it.
+    """
+
+    TOP = 1 << 24
+    BOTTOM = 1 << 16
+
+    def __init__(self, freqs):
+        total = int(sum(freqs))
+        self.total = total
+        cum = 0
+        self.cum_freqs = []
+        self.freqs = []
+        for f in freqs:
+            self.cum_freqs.append(cum)
+            self.freqs.append(int(f))
+            cum += int(f)
+
+    def encode(self, symbols):
+        low = 0
+        rng = 0xFFFFFFFF
+        out = bytearray()
+        for sym in symbols:
+            f = self.freqs[sym]
+            if f == 0:
+                continue
+            cf = self.cum_freqs[sym]
+            rng //= self.total
+            low = (low + cf * rng) & 0xFFFFFFFF
+            rng *= f
+            while True:
+                if (low ^ (low + rng)) < self.TOP:
+                    pass
+                elif rng < self.BOTTOM:
+                    rng = (-low) & (self.BOTTOM - 1)
+                else:
+                    break
+                out.append((low >> 24) & 0xFF)
+                low = (low << 8) & 0xFFFFFFFF
+                rng = (rng << 8) & 0xFFFFFFFF
+        for _ in range(4):
+            out.append((low >> 24) & 0xFF)
+            low = (low << 8) & 0xFFFFFFFF
+        return bytes(out)
+
+
+def range_encode_latent_symbols(latent_batch, num_images, bit_depth=8):
+    """Actually range-encode `num_images` worth of quantized latent symbols.
+
+    Returns the real compressed byte size (payload only, static per-sample
+    histogram not counted) so it can be compared against the entropy estimate.
+    """
+    num_levels = (1 << int(bit_depth))
+    max_level = num_levels - 1
+    levels = np.clip(np.round(np.asarray(latent_batch) * max_level), 0, max_level).astype(np.int64)
+    n = min(num_images, levels.shape[0])
+    if n <= 0:
+        return {"available": False, "reason": "no samples"}
+
+    sample = levels[:n]
+    flat = sample.reshape(-1)
+    counts = np.bincount(flat, minlength=num_levels)
+    # Avoid zero-frequency symbols so the coder never divides by zero.
+    freqs = np.maximum(counts, 1)
+
+    encoder = _StaticRangeEncoder(freqs)
+    encoded = encoder.encode(flat.tolist())
+
+    symbols_per_image = int(np.prod(sample.shape[1:]))
+    total_symbols = int(flat.shape[0])
+    entropy_bits_per_symbol = float(
+        -np.sum((counts[counts > 0] / counts.sum()) * np.log2(counts[counts > 0] / counts.sum()))
+    )
+
+    return {
+        "available": True,
+        "sample_count": int(n),
+        "symbols_per_image": symbols_per_image,
+        "total_symbols_encoded": total_symbols,
+        "actual_compressed_bytes": len(encoded),
+        "actual_compressed_bytes_per_image": len(encoded) / n,
+        "entropy_estimate_bytes_per_image": (entropy_bits_per_symbol * symbols_per_image) / 8.0,
+        "note": (
+            "Static per-sample frequency table is not itself transmitted/counted; "
+            "a deployed coder would need an agreed-upon or separately-coded entropy model."
+        ),
     }
 
 
@@ -630,7 +925,7 @@ def plot_history(history, plot_path):
     plt.close(fig)
 
 
-def save_report(args, split_info, history, eval_values, lossy_stats, baseline_benchmark, run_dir, plot_path):
+def save_report(args, split_info, history, eval_values, lossy_stats, baseline_benchmark, run_dir, plot_path, latent_rate_stats=None, entropy_coding=None):
     payload = {
         "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "config": vars(args),
@@ -639,6 +934,8 @@ def save_report(args, split_info, history, eval_values, lossy_stats, baseline_be
         "test_metrics": {k: float(v) for k, v in eval_values.items()},
         "lossy_size_stats": lossy_stats,
         "matched_psnr_baseline_benchmark": baseline_benchmark,
+        "latent_rate_stats": latent_rate_stats,
+        "entropy_coding": entropy_coding,
         "plot_path": plot_path,
     }
     report_path = os.path.join(run_dir, "evaluation_report.md")
@@ -689,6 +986,9 @@ def main():
         args.rate_lambda,
         model_base_filters=args.model_base_filters,
         model_kernel_size=args.model_kernel_size,
+        rate_loss_mode=args.rate_loss_mode,
+        latent_bit_depth=args.latent_bit_depth,
+        quant_noise_anneal=args.quant_noise_anneal,
     )
     model.compile(
         optimizer=tf.keras.optimizers.Adam(learning_rate=args.lr),
@@ -720,6 +1020,9 @@ def main():
                 target_ratio=args.target_compression_ratio,
             )
         )
+    if args.quant_noise_anneal:
+        quant_layer = model.get_layer("bottleneck_quant")
+        cb.append(QuantNoiseAnnealCallback(quant_layer, args.epochs))
 
     history = model.fit(
         train_data,
@@ -745,7 +1048,31 @@ def main():
             sample_count=args.sample_count,
             model_size_stats=lossy_stats,
         )
-    report_path = save_report(args, split_info, history, eval_values, lossy_stats, baseline_benchmark, run_dir, plot_path)
+
+    latent_rate_stats = None
+    entropy_coding = None
+    latent_model = get_latent_submodel(model)
+    for images, _ in test_data.take(1):
+        latent_batch = latent_model.predict(images, verbose=0)
+        latent_rate_stats = compute_latent_entropy_stats(
+            latent_batch, image_pixel_count=args.block_size * args.block_size, bit_depth=args.latent_bit_depth
+        )
+        if args.enable_entropy_coding:
+            entropy_coding = range_encode_latent_symbols(latent_batch, args.entropy_coding_samples, bit_depth=args.latent_bit_depth)
+        break
+
+    report_path = save_report(
+        args,
+        split_info,
+        history,
+        eval_values,
+        lossy_stats,
+        baseline_benchmark,
+        run_dir,
+        plot_path,
+        latent_rate_stats=latent_rate_stats,
+        entropy_coding=entropy_coding,
+    )
 
     weights_path = os.path.join(run_dir, "production_model.weights.h5")
     model.save_weights(weights_path)
@@ -782,6 +1109,19 @@ def main():
             print(f"[+] Model JPEG size vs matched-PSNR WebP baseline: {float(webp_ratio):.3f}")
         if baseline_benchmark.get("webp_baseline", {}).get("available") is False:
             print("[!] WebP baseline unavailable in this TensorFlow build; see report for details.")
+
+    if latent_rate_stats is not None:
+        print(
+            f"[+] Real latent bits/pixel (empirical entropy): {latent_rate_stats['latent_bits_per_pixel']:.3f} "
+            f"(~{latent_rate_stats['estimated_bitstream_bytes_per_image']:.0f} bytes/image, "
+            f"rate-loss-mode={args.rate_loss_mode})"
+        )
+    if entropy_coding and entropy_coding.get("available"):
+        print(
+            f"[+] Prototype range coder: {entropy_coding['actual_compressed_bytes_per_image']:.0f} "
+            f"actual bytes/image over {entropy_coding['sample_count']} samples "
+            f"(entropy estimate: {entropy_coding['entropy_estimate_bytes_per_image']:.0f} bytes/image)"
+        )
 
     if float(eval_values.get("psnr_metric", 0.0)) < args.target_psnr:
         print(

@@ -37,7 +37,8 @@
           "round": 5
         },
         "jpeg_quality": [70, 76, 82, 88, 92],
-        "sample_count": [4, 6, 8, 12]
+        "sample_count": [4, 6, 8, 12],
+        "latent_bit_depth": [8]
       }
     },
     "audio": {
