@@ -41,7 +41,7 @@ if [[ -n "$OLD_PIDS" ]]; then
   fi
 fi
 
-PIPELINE_CMD="\"$PYTHON\" \"$ROOT/run_full_production_pipeline.py\" --project-root \"$ROOT\" --python \"$PYTHON\" --resource-profile balanced --include-video --video-max-clips 12000 --trials-image-standard 12 --trials-image-lossy 12 --trials-audio 10 --trials-video 8 --minutes-image-standard 180 --minutes-image-lossy 180 --minutes-audio 180 --minutes-video 240 --search-output-root \"$PIPELINE_SEARCH_ROOT\" --train-output-root \"$PIPELINE_TRAIN_ROOT\" --production-root \"$PIPELINE_PRODUCTION_ROOT\""
+PIPELINE_CMD="\"$PYTHON\" \"$ROOT/src/pipeline/run_full_production_pipeline.py\" --project-root \"$ROOT\" --python \"$PYTHON\" --resource-profile balanced --include-video --video-max-clips 12000 --trials-image-standard 12 --trials-image-lossy 12 --trials-audio 10 --trials-video 8 --minutes-image-standard 180 --minutes-image-lossy 180 --minutes-audio 180 --minutes-video 240 --search-output-root \"$PIPELINE_SEARCH_ROOT\" --train-output-root \"$PIPELINE_TRAIN_ROOT\" --production-root \"$PIPELINE_PRODUCTION_ROOT\""
 run_cmd "$PIPELINE_CMD | tee \"$LOG_DIR/01_full_pipeline.log\""
 
 echo "[automation] complete. outputs under: $RUN_ROOT"

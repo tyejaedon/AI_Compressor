@@ -11,6 +11,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "reporting"))
 from report_markdown import read_markdown_json_report
 
 
@@ -19,7 +20,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--project-root",
         type=Path,
-        default=Path(__file__).resolve().parent,
+        default=Path(__file__).resolve().parent.parent.parent,
         help="Project root containing training scripts",
     )
     parser.add_argument(
@@ -95,7 +96,7 @@ def get_image_upscale_psnr(project_root: Path, python_exec: str, model_path: Pat
     run_root = project_root / output_root / "image_standard_fullres_eval"
     cmd = [
         python_exec,
-        "upscale_reconstructed_images.py",
+        "src/reporting/upscale_reconstructed_images.py",
         "--model",
         str(model_path),
         "--data-dir",
@@ -134,7 +135,7 @@ def modality_plan(args: argparse.Namespace) -> list[dict[str, object]]:
     return [
         {
             "name": "image_standard_upscaler",
-            "script": "train_autoencoder_image_local.py",
+            "script": "src/training/train_autoencoder_image_local.py",
             "report": "evaluation_report.md",
             "output_root": f"{root}/image_standard",
             "base": {
@@ -158,7 +159,7 @@ def modality_plan(args: argparse.Namespace) -> list[dict[str, object]]:
         },
         {
             "name": "image_lossy",
-            "script": "train_autoencoder_image_lossy_local.py",
+            "script": "src/training/train_autoencoder_image_lossy_local.py",
             "report": "evaluation_report.md",
             "output_root": f"{root}/image_lossy",
             "base": {
@@ -180,7 +181,7 @@ def modality_plan(args: argparse.Namespace) -> list[dict[str, object]]:
         },
         {
             "name": "audio",
-            "script": "train_autoencoder_audio_local.py",
+            "script": "src/training/train_autoencoder_audio_local.py",
             "report": "audio_evaluation_report.md",
             "output_root": f"{root}/audio",
             "base": {
@@ -199,7 +200,7 @@ def modality_plan(args: argparse.Namespace) -> list[dict[str, object]]:
         },
         {
             "name": "video",
-            "script": "train_autoencoder_video_local.py",
+            "script": "src/training/train_autoencoder_video_local.py",
             "report": "video_evaluation_report.md",
             "output_root": f"{root}/video",
             "base": {

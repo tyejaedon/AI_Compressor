@@ -1,0 +1,37 @@
+name: Release
+
+# CD: packaging/release automation only. This repo trains models locally
+# (see AGENT.md) — there is no cloud training/deploy target, so "CD" here means
+# cutting a GitHub Release with generated notes plus a docs bundle artifact
+# whenever a version tag is pushed.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Package docs bundle
+        run: |
+          mkdir -p dist
+          tar -czf "dist/ai-compressor-docs-${GITHUB_REF_NAME}.tar.gz" \
+            README.md AGENT.md CONTRIBUTING.md documentation
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes \
+            "dist/ai-compressor-docs-${GITHUB_REF_NAME}.tar.gz"

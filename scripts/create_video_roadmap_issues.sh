@@ -131,16 +131,16 @@ V5="V5: Reporting, Search & Docs Alignment"
 create_milestone "$V5" \
 "Keep random search, docs, and reports in sync with V1-V4. See documentation/VIDEO_PIPELINE_ROADMAP.md#milestone-v5"
 create_issue "$V5" "[video/search] Extend video search space for new flags" \
-"bit-depth, temporal-mode, loss-profile added to random_search_hyperparams.py and documentation/random_search_profile.json.
+"bit-depth, temporal-mode, loss-profile added to src/training/random_search_hyperparams.py and documentation/random_search_profile.json.
 
 Ref: documentation/VIDEO_PIPELINE_ROADMAP.md, Milestone V5." "video,search"
 create_issue "$V5" "[video/docs] Full CLI flag audit for the video trainer" \
 "Ref: documentation/VIDEO_PIPELINE_ROADMAP.md, Milestone V5." "video,docs"
 create_issue "$V5" "[video/reporting] Add a compression-ratio/PSNR frontier plot for video trials" \
-"Extend plot_training_metrics_from_report.py / generate_master_report.py.
+"Extend src/reporting/plot_training_metrics_from_report.py / src/reporting/generate_master_report.py.
 
 Ref: documentation/VIDEO_PIPELINE_ROADMAP.md, Milestone V5." "video"
-create_issue "$V5" "[video/pipeline] Sync run_full_production_pipeline.py with any renamed/added video flags" \
+create_issue "$V5" "[video/pipeline] Sync src/pipeline/run_full_production_pipeline.py with any renamed/added video flags" \
 "Verify end-to-end pipeline still runs after Milestones V1-V4 land.
 
 Ref: documentation/VIDEO_PIPELINE_ROADMAP.md, Milestone V5." "video"

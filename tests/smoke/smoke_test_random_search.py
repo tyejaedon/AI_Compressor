@@ -7,10 +7,10 @@ from pathlib import Path
 
 
 def main() -> None:
-    project_root = Path(__file__).resolve().parent.parent
+    project_root = Path(__file__).resolve().parent.parent.parent
     cmd = [
         sys.executable,
-        str(project_root / "random_search_hyperparams.py"),
+        str(project_root / "src" / "training" / "random_search_hyperparams.py"),
         "--modality",
         "image",
         "--trials",

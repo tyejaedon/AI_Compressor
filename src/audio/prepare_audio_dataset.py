@@ -5,12 +5,14 @@ import argparse
 import json
 import shutil
 import subprocess
+import sys
 import wave
 from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "reporting"))
 from report_markdown import write_markdown_json_report
 
 

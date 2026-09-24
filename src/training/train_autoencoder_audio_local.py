@@ -32,6 +32,7 @@ except ImportError:
     apply_overrides = None
     load_overrides = None
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "reporting"))
 try:
     from report_markdown import write_markdown_json_report
 except ImportError:

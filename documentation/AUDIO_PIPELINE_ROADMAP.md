@@ -2,29 +2,29 @@
 
 Status: Draft v1 · Owner: audio modality · Companion to `AGENT.md` / `CONTRIBUTING.md`
 
-This roadmap targets `train_autoencoder_audio_local.py`, `prepare_audio_dataset.py`,
-`realtime_audio_vortex_pipeline.py` / `vortex_realtime_demo.py`, and the audio paths
-in `random_search_hyperparams.py` / `param_overrides.py`.
+This roadmap targets `src/training/train_autoencoder_audio_local.py`, `src/audio/prepare_audio_dataset.py`,
+`src/audio/realtime_audio_vortex_pipeline.py` / `src/audio/vortex_realtime_demo.py`, and the audio paths
+in `src/training/random_search_hyperparams.py` / `src/training/param_overrides.py`.
 
 ## 1. Current state (as of this roadmap)
 
 | Area | Today |
 |---|---|
 | Architecture | Conv1D encoder (4 stages, stride-2, 16× downsample) → linear Dense bottleneck (no ReLU, preserves signed/phase-continuous values) → Conv1DTranspose decoder (16× upsample, no skip connections) → tanh output. |
-| Data pipeline | `prepare_audio_dataset.py` canonicalizes mp3/flac/ogg/m4a/aac/opus/wav → mono PCM16 WAV at a target sample rate with `none/peak/rms/rms_peak` normalization + JSON sidecar metadata. Trainer loads canonical WAVs, mono-downmixes, resamples via linear interpolation, pads/crops to a fixed `clip_len = sample_rate * clip_seconds`. |
+| Data pipeline | `src/audio/prepare_audio_dataset.py` canonicalizes mp3/flac/ogg/m4a/aac/opus/wav → mono PCM16 WAV at a target sample rate with `none/peak/rms/rms_peak` normalization + JSON sidecar metadata. Trainer loads canonical WAVs, mono-downmixes, resamples via linear interpolation, pads/crops to a fixed `clip_len = sample_rate * clip_seconds`. |
 | Compression accounting | **Theoretical only**: `estimate_audio_compression_ratio()` compares `clip_len*16 bits` vs `latent_dim*latent_bits` — the latent is **never actually quantized or entropy-coded**; it's dense float32 throughout training and export. |
 | Loss/metrics | Weighted MSE + L1 + STFT-magnitude loss with a "hard residual" upweighting term; tracks SNR (dB, primary) and PSNR. `TargetSNRCallback` stops early at `--target-snr-db` (default 90). |
-| Real-time path | `realtime_audio_vortex_pipeline.py` is a **feature-extraction-only** pipeline (FFT band energies → visual "vortex" control signals for a demo). It does **not** run the trained autoencoder — there is no real-time/streaming inference path for the compression model itself. |
+| Real-time path | `src/audio/realtime_audio_vortex_pipeline.py` is a **feature-extraction-only** pipeline (FFT band energies → visual "vortex" control signals for a demo). It does **not** run the trained autoencoder — there is no real-time/streaming inference path for the compression model itself. |
 | Robustness | Mono-only (stereo is downmixed), fixed training sample rate (16 kHz) vs. fixed vortex demo rate (48 kHz), no noise augmentation, silent fallback-to-silence on WAV read failure. |
-| Search & docs | `random_search_hyperparams.py` samples latent_dim/filters/kernel/batch/epochs/lr/clip_seconds for audio; ranks by `snr_db_metric`. `--params-file` JSON `audio` section documented in `documentation/MODEL_PARAMS_INPUT.md`. |
+| Search & docs | `src/training/random_search_hyperparams.py` samples latent_dim/filters/kernel/batch/epochs/lr/clip_seconds for audio; ranks by `snr_db_metric`. `--params-file` JSON `audio` section documented in `documentation/MODEL_PARAMS_INPUT.md`. |
 
 ## 2. Constraints (do not violate)
 
 1. **Laptop-only (M1) compute** — every milestone needs a tiny/smoke-testable path.
 2. **Frozen preset defaults** (`m1-air-fast/balanced/quality`) tied to `README.md` benchmark numbers — changes must be called out explicitly in their own PR.
-3. **CI stays lightweight** — no training/data-dependent jobs in CI; new functionality must be smoke-testable via `smokeTests/smoke_test_audio_local.py` / `smoke_test_prepare_audio_dataset.py` / `smoke_test_vortex_pipeline.py` locally.
-4. **No package refactor** — stay within the flat CLI-script structure.
-5. **Backward-compatible CLI** — new flags default to reproducing current behavior; breaking renames require a `!`/`BREAKING CHANGE` commit and a `run_full_production_pipeline.py` sync.
+3. **CI stays lightweight** — no training/data-dependent jobs in CI; new functionality must be smoke-testable via `tests/smoke/smoke_test_audio_local.py` / `smoke_test_prepare_audio_dataset.py` / `smoke_test_vortex_pipeline.py` locally.
+4. **No installable-package refactor** — scripts live under `src/{training,pipeline,reporting,audio}/` for discoverability but remain plain CLI scripts (`python src/.../script.py`), not an installable package.
+5. **Backward-compatible CLI** — new flags default to reproducing current behavior; breaking renames require a `!`/`BREAKING CHANGE` commit and a `src/pipeline/run_full_production_pipeline.py` sync.
 
 ## 3. Goals
 
@@ -50,13 +50,13 @@ Issues:
 
 ### Milestone A2 — Real-Time Streaming Compression Path
 **Objective:** Give the trained autoencoder an actual streaming/chunked inference path, distinct from the existing vortex feature-extraction demo.
-**Why:** `realtime_audio_vortex_pipeline.py` never invokes the trained model — there is currently no way to run the compressor in real time at all.
+**Why:** `src/audio/realtime_audio_vortex_pipeline.py` never invokes the trained model — there is currently no way to run the compressor in real time at all.
 **Exit criteria:** A new streaming inference module can take arbitrary-length PCM input, process it in `clip_len`-sized (or overlap-add) chunks through a loaded model, and reconstruct output with bounded latency, with a smoke test proving no crash on a short synthetic stream.
 
 Issues:
 1. **[audio/streaming] Design a chunked/overlap-add inference wrapper for the trained autoencoder** — reuse existing fixed `clip_len` constraint; document latency implications.
-2. **[audio/streaming] Add `realtime_audio_compression_pipeline.py`** — mirrors `realtime_audio_vortex_pipeline.py`'s streaming buffer conventions but decodes/encodes through the trained model instead of extracting FFT features.
-3. **[audio/streaming] Add a smoke test for streaming inference** — `smokeTests/smoke_test_realtime_audio_compression.py`, tiny model + short synthetic stream, asserts output shape/latency bounds.
+2. **[audio/streaming] Add `realtime_audio_compression_pipeline.py`** — mirrors `src/audio/realtime_audio_vortex_pipeline.py`'s streaming buffer conventions but decodes/encodes through the trained model instead of extracting FFT features.
+3. **[audio/streaming] Add a smoke test for streaming inference** — `tests/smoke/smoke_test_realtime_audio_compression.py`, tiny model + short synthetic stream, asserts output shape/latency bounds.
 4. **[audio/docs] Document the real-time compression path and its relationship to the vortex demo** — clarify in README that the vortex pipeline is visualization-only.
 
 ### Milestone A3 — Perceptual Quality & Psychoacoustic Loss
@@ -82,15 +82,15 @@ Issues:
 4. **[audio/data] Add a corrupted/noisy-input robustness smoke check** — feed a clipped/corrupted WAV through inference and assert graceful handling (no crash, bounded SNR drop) instead of silent fallback-to-silence.
 
 ### Milestone A5 — Reporting, Search & Docs Alignment
-**Objective:** Keep `random_search_hyperparams.py`, `documentation/*.md`, and evaluation reports consistent with A1–A4 as they land.
+**Objective:** Keep `src/training/random_search_hyperparams.py`, `documentation/*.md`, and evaluation reports consistent with A1–A4 as they land.
 **Why:** Every milestone above adds flags/metrics; without this milestone docs and search spaces drift (a known repo risk per `AGENT.md`).
 **Exit criteria:** Random search can sweep any new axis (bit-depth, loss-profile, resample-method) behind explicit toggles; `documentation/MODEL_PARAMS_INPUT.md` and `README.md` enumerate every new flag.
 
 Issues:
-1. **[audio/search] Extend audio search space for new flags** — bit-depth, loss-profile, resample-method added to `random_search_hyperparams.py` and `documentation/random_search_profile.json`.
+1. **[audio/search] Extend audio search space for new flags** — bit-depth, loss-profile, resample-method added to `src/training/random_search_hyperparams.py` and `documentation/random_search_profile.json`.
 2. **[audio/docs] Full CLI flag audit for the audio trainer** — cross-check `--help` output vs `documentation/MODEL_PARAMS_INPUT.md`.
-3. **[audio/reporting] Add a compression-ratio/SNR frontier plot** — extend `plot_training_metrics_from_report.py` / `generate_master_report.py`.
-4. **[audio/pipeline] Sync `run_full_production_pipeline.py` with any renamed/added audio flags.**
+3. **[audio/reporting] Add a compression-ratio/SNR frontier plot** — extend `src/reporting/plot_training_metrics_from_report.py` / `src/reporting/generate_master_report.py`.
+4. **[audio/pipeline] Sync `src/pipeline/run_full_production_pipeline.py` with any renamed/added audio flags.**
 
 ## 5. Suggested sequencing
 

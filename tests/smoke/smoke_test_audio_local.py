@@ -7,10 +7,10 @@ from pathlib import Path
 
 
 def main():
-    root = Path(__file__).resolve().parent.parent
+    root = Path(__file__).resolve().parent.parent.parent
     cmd = [
         sys.executable,
-        str(root / "train_autoencoder_audio_local.py"),
+        str(root / "src" / "training" / "train_autoencoder_audio_local.py"),
         "--preset",
         "custom",
         "--epochs",

@@ -17,6 +17,8 @@ import tensorflow as tf
 from tensorflow.keras import Model, callbacks, layers, regularizers
 
 from param_overrides import apply_overrides, load_overrides
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "reporting"))
 from report_markdown import write_markdown_json_report
 
 

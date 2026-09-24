@@ -4,7 +4,10 @@ import glob
 import json
 import os
 import shutil
+import sys
+from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "reporting"))
 from report_markdown import read_markdown_json_report
 
 BASE = "/Users/tyejaedon/PycharmProjects/AI_Compressor/models"
