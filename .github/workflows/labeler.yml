@@ -1,0 +1,24 @@
+name: PR Labeler
+
+# Auto-applies modality/area labels (image, audio, video, pipeline, docs, infra)
+# to pull requests based on changed file paths, so PRs stay in sync with the
+# label taxonomy documented in CONTRIBUTING.md without manual upkeep. See the
+# "Labels" section of .github/PULL_REQUEST_TEMPLATE.md.
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/labeler@v5
+        with:
+          configuration-path: .github/labeler.yml
+          sync-labels: true
+

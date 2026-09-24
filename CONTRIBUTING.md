@@ -40,7 +40,17 @@ existing CLI flags/behavior, e.g. `feat(video)!: rename --clip-len to --frames`.
 
 - Open a PR from your topic branch into `master` using the PR template
   (`.github/PULL_REQUEST_TEMPLATE.md`) — fill it out completely.
-- Link the issue it closes (`Closes #123`) where applicable.
+- Link issues using GitHub closing keywords (`Closes #123`, `Fixes #123`) for
+  issues the PR fully resolves (auto-closes on merge), or `Refs #123` for
+  issues it only relates to.
+- Set the PR's **Milestone** in the sidebar to match the roadmap milestone it
+  contributes to (see `documentation/*_PIPELINE_ROADMAP.md`) or a release
+  milestone, and note it in the PR body.
+- Modality/area **labels** (`image`, `audio`, `video`, `pipeline`, `docs`,
+  `infra`) are auto-applied by `.github/workflows/labeler.yml` based on changed
+  file paths (config in `.github/labeler.yml`) — double check they landed, and
+  add a type label (`bug`/`enhancement`/`chore`) manually since that isn't
+  path-derivable.
 - Keep PRs scoped to one modality/concern when possible.
 - **Enforcement is via the PR template checklist + human review** — there is no
   automated commit-linter. Reviewers should block merge if branch/commit
