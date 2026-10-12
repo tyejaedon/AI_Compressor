@@ -1,6 +1,7 @@
 {
   "image": {
     "preset": "custom",
+    "cache_dir": "models/cache/image",
     "block_size": 32,
     "degrade_interp": "bicubic",
     "upscale_factor": 1,

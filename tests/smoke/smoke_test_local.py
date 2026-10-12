@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Tiny local smoke test for the autoencoder trainer."""
 
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -8,7 +9,12 @@ from pathlib import Path
 
 def main():
     project_root = Path(__file__).resolve().parent.parent.parent
-    output_root = project_root / "models" / "smoke_test"
+    output_root = project_root / "models" / "smoke_test" / "image_cache_local"
+    run_output_root = output_root / "runs"
+    cache_dir = output_root / "tensor_cache"
+
+    if output_root.exists():
+        shutil.rmtree(output_root)
 
     cmd = [
         sys.executable,
@@ -27,10 +33,20 @@ def main():
         "--block-size",
         "64",
         "--output-root",
-        str(output_root),
+        str(run_output_root),
+        "--cache-dir",
+        str(cache_dir),
+        "--no-export-tflite",
     ]
 
-    subprocess.check_call(cmd)
+    first = subprocess.run(cmd, check=True, capture_output=True, text=True)
+    second = subprocess.run(cmd, check=True, capture_output=True, text=True)
+
+    first_output = first.stdout + first.stderr
+    second_output = second.stdout + second.stderr
+
+    assert "Cache train: status=built" in first_output, first_output
+    assert "Cache train: status=hit" in second_output, second_output
     print("[+] Smoke test passed")
 
 

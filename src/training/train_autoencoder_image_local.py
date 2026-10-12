@@ -2,6 +2,7 @@
 """Local MacBook-friendly image autoencoder trainer with Edge-Sharpening & Remaster Pipeline."""
 
 import argparse
+import hashlib
 import json
 import logging
 import math
@@ -34,7 +35,7 @@ class _JsonLinesFileHandler(logging.Handler):
     def __init__(self, log_path):
         super().__init__()
         self.log_path = log_path
-        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        os.makedirs(str(os.path.dirname(log_path)), exist_ok=True)
 
     def emit(self, record):
         payload = getattr(record, "structured", None)
@@ -100,6 +101,12 @@ def parse_args_extended():
     parser.add_argument("--split-file-limit", type=int, default=0, help="Optional cap per explicit split directory")
     parser.add_argument("--valid-dir", type=str, default="data/cifar10_valid", help="Local directory placeholder for CIFAR-10 validation assets")
     parser.add_argument("--output-root", type=str, default="models/local_run", help="Output directory for weights/reports")
+    parser.add_argument(
+        "--cache-dir",
+        type=str,
+        default="",
+        help="Optional directory for an on-disk TFRecord tensor cache keyed by split inputs; default off",
+    )
     parser.add_argument("--params-file", type=str, default="", help="Optional JSON file with parameter overrides")
     parser.add_argument("--block-size", type=int, default=128, help="Training patch size for cropped image blocks")
     parser.add_argument("--latent-dim", type=int, default=128, help="Latent bottleneck size")
@@ -245,6 +252,23 @@ def split_indices(n, val_ratio, test_ratio, rng):
     return train_idx, val_idx, test_idx
 
 
+def persist_skipped_records(records):
+    """Persist cached skipped-image records into this run's JSONL log without
+    replaying them to the console."""
+    if not records:
+        return
+
+    file_handlers = [handler for handler in skipped_images_logger.handlers if isinstance(handler, _JsonLinesFileHandler)]
+    if not file_handlers:
+        return
+
+    for handler in file_handlers:
+        os.makedirs(os.path.dirname(handler.log_path), exist_ok=True)
+        with open(handler.log_path, "a") as f:
+            for record in records:
+                f.write(json.dumps(record) + "\n")
+
+
 def filter_paths_by_min_size(paths, min_size):
     """Filters image paths by minimum side length, logging a structured
     record for every skipped image (undersized or unreadable/corrupt)."""
@@ -265,8 +289,175 @@ def filter_paths_by_min_size(paths, min_size):
                     log_skipped_image(path, "undersized", f"{w}x{h} < min_side={min_side}")
                 )
         except Exception as exc:
-            skipped_records.append(log_skipped_image(path, "corrupt_or_unreadable", exc))
+            skipped_records.append(log_skipped_image(path, "corrupt_or_unreadable", str(exc)))
     return np.array(kept, dtype=np.str_), skipped_records
+
+
+def compute_image_tensor_cache_key(paths, block_size, split_name):
+    hasher = hashlib.sha256()
+    hasher.update(b"ai_compressor_image_tensor_cache_v1")
+    hasher.update(f"|split={split_name}|block_size={int(block_size)}".encode("utf-8"))
+    for raw_path in sorted(str(path) for path in paths):
+        hasher.update(raw_path.encode("utf-8"))
+        try:
+            stat = Path(raw_path).stat()
+            hasher.update(f"|size={stat.st_size}|mtime_ns={stat.st_mtime_ns}".encode("utf-8"))
+        except OSError:
+            hasher.update(b"|missing")
+    return hasher.hexdigest()[:20]
+
+
+def load_image_tensor_cache_manifest(manifest_path):
+    if not os.path.exists(manifest_path):
+        return None
+    try:
+        with open(manifest_path) as f:
+            payload = json.load(f)
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if not isinstance(payload.get("kept_paths", []), list):
+        return None
+    if not isinstance(payload.get("skipped_records", []), list):
+        return None
+    return payload
+
+
+def build_or_load_image_tensor_cache(paths, min_size, cache_dir, split_name):
+    resolved_cache_dir = os.path.abspath(os.path.expanduser(cache_dir))
+    cache_root = os.path.join(resolved_cache_dir, "image_tensor_cache")
+    os.makedirs(cache_root, exist_ok=True)
+
+    split_slug = str(split_name).replace(" ", "_").lower()
+    cache_key = compute_image_tensor_cache_key(paths, min_size, split_slug)
+    tfrecord_path = os.path.join(cache_root, f"{split_slug}_{cache_key}.tfrecord")
+    manifest_path = os.path.join(cache_root, f"{split_slug}_{cache_key}.manifest.json")
+
+    manifest = load_image_tensor_cache_manifest(manifest_path)
+    if manifest is not None and os.path.exists(tfrecord_path):
+        kept_paths = np.array(manifest.get("kept_paths", []), dtype=np.str_)
+        skipped_records = list(manifest.get("skipped_records", []))
+        persist_skipped_records(skipped_records)
+        return kept_paths, skipped_records, {
+            "enabled": True,
+            "status": "hit",
+            "split": split_slug,
+            "cache_key": cache_key,
+            "cache_dir": cache_root,
+            "tfrecord_path": tfrecord_path,
+            "manifest_path": manifest_path,
+            "num_images": int(len(kept_paths)),
+            "skipped_images_count": int(len(skipped_records)),
+        }
+
+    tmp_tfrecord_path = tfrecord_path + ".tmp"
+    tmp_manifest_path = manifest_path + ".tmp"
+    kept_paths = []
+    skipped_records = []
+    writer = tf.io.TFRecordWriter(tmp_tfrecord_path)
+    try:
+        min_side = max(1, int(min_size))
+        for path in paths:
+            try:
+                image_bytes = tf.io.read_file(path)
+                image = tf.io.decode_image(image_bytes, channels=3, expand_animations=False)
+                shape = tf.shape(image)
+                h = int(shape[0].numpy())
+                w = int(shape[1].numpy())
+                if h < min_side or w < min_side:
+                    skipped_records.append(
+                        log_skipped_image(path, "undersized", f"{w}x{h} < min_side={min_side}")
+                    )
+                    continue
+
+                example = tf.train.Example(
+                    features=tf.train.Features(
+                        feature={
+                            "path": tf.train.Feature(bytes_list=tf.train.BytesList(value=[str(path).encode("utf-8")])),
+                            "image": tf.train.Feature(
+                                bytes_list=tf.train.BytesList(value=[tf.io.serialize_tensor(image).numpy()])
+                            ),
+                        }
+                    )
+                )
+                writer.write(example.SerializeToString())
+                kept_paths.append(str(path))
+            except Exception as exc:
+                skipped_records.append(log_skipped_image(path, "corrupt_or_unreadable", str(exc)))
+    finally:
+        writer.close()
+
+    manifest_payload = {
+        "version": 1,
+        "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "split": split_slug,
+        "block_size": int(min_size),
+        "cache_key": cache_key,
+        "kept_paths": kept_paths,
+        "skipped_records": skipped_records,
+        "tfrecord_path": tfrecord_path,
+    }
+    try:
+        with open(tmp_manifest_path, "w") as f:
+            json.dump(manifest_payload, f, indent=2)
+        os.replace(tmp_tfrecord_path, tfrecord_path)
+        os.replace(tmp_manifest_path, manifest_path)
+    except Exception:
+        if os.path.exists(tmp_tfrecord_path):
+            os.remove(tmp_tfrecord_path)
+        if os.path.exists(tmp_manifest_path):
+            os.remove(tmp_manifest_path)
+        raise
+
+    return np.array(kept_paths, dtype=np.str_), skipped_records, {
+        "enabled": True,
+        "status": "built",
+        "split": split_slug,
+        "cache_key": cache_key,
+        "cache_dir": cache_root,
+        "tfrecord_path": tfrecord_path,
+        "manifest_path": manifest_path,
+        "num_images": int(len(kept_paths)),
+        "skipped_images_count": int(len(skipped_records)),
+    }
+
+
+def maybe_prepare_real_image_cache(paths, min_size, cache_dir, split_name):
+    if not cache_dir:
+        kept_paths, skipped_records = filter_paths_by_min_size(paths, min_size)
+        return kept_paths, skipped_records, make_disabled_cache_info(split_name, len(kept_paths), len(skipped_records))
+    return build_or_load_image_tensor_cache(paths, min_size, cache_dir, split_name)
+
+
+def make_disabled_cache_info(split_name, num_images, skipped_images_count=0):
+    return {
+        "enabled": False,
+        "status": "disabled",
+        "split": str(split_name).replace(" ", "_").lower(),
+        "cache_key": "",
+        "cache_dir": "",
+        "tfrecord_path": "",
+        "manifest_path": "",
+        "num_images": int(num_images),
+        "skipped_images_count": int(skipped_images_count),
+    }
+
+
+def summarize_cache_info(cache_info):
+    if not cache_info:
+        return {"enabled": False, "status": "disabled"}
+    return {
+        "enabled": bool(cache_info.get("enabled", False)),
+        "status": str(cache_info.get("status", "disabled")),
+        "split": str(cache_info.get("split", "")),
+        "cache_key": str(cache_info.get("cache_key", "")),
+        "cache_dir": str(cache_info.get("cache_dir", "")),
+        "tfrecord_path": str(cache_info.get("tfrecord_path", "")),
+        "manifest_path": str(cache_info.get("manifest_path", "")),
+        "num_images": int(cache_info.get("num_images", 0)),
+        "skipped_images_count": int(cache_info.get("skipped_images_count", 0)),
+    }
 
 
 def detect_split_dirs(data_dir):
@@ -295,8 +486,8 @@ def detect_split_dirs(data_dir):
     }
 
 
-def make_dataset_from_paths(
-    paths,
+def make_dataset_from_image_dataset(
+    image_ds,
     block_size,
     batch_size,
     seed,
@@ -317,13 +508,6 @@ def make_dataset_from_paths(
         "bicubic": tf.image.ResizeMethod.BICUBIC,
     }
     degrade_method = interp_map.get(str(degrade_interp).lower(), tf.image.ResizeMethod.BICUBIC)
-
-    def _decode(path):
-        image_bytes = tf.io.read_file(path)
-        image = tf.io.decode_image(image_bytes, channels=3, expand_animations=False)
-        image = tf.cast(image, tf.float32) / 255.0
-        image.set_shape([None, None, 3])
-        return tf.clip_by_value(image, 0.0, 1.0)
 
     def _sample_pair(image):
         if center_crop:
@@ -354,20 +538,136 @@ def make_dataset_from_paths(
         return lowres_input, patch
 
     def _path_to_patches(path):
-        image = _decode(path)
         patch_ds = tf.data.Dataset.range(patch_count)
-        return patch_ds.map(lambda _: _sample_pair(image), num_parallel_calls=tf.data.AUTOTUNE)
+        return patch_ds.map(lambda _: _sample_pair(path), num_parallel_calls=tf.data.AUTOTUNE)
 
-    ds = tf.data.Dataset.from_tensor_slices(paths)
-    if shuffle:
-        ds = ds.shuffle(buffer_size=len(paths), seed=seed, reshuffle_each_iteration=True)
-    ds = ds.interleave(
+    ds = image_ds.interleave(
         _path_to_patches,
         cycle_length=tf.data.AUTOTUNE,
         num_parallel_calls=tf.data.AUTOTUNE,
         deterministic=not shuffle,
     )
     return ds.batch(batch_size).prefetch(tf.data.AUTOTUNE)
+
+
+def make_dataset_from_paths(
+    paths,
+    block_size,
+    batch_size,
+    seed,
+    shuffle,
+    patches_per_image=1,
+    augment=False,
+    center_crop=False,
+    upscale_factor=4,
+    degrade_interp="bicubic",
+):
+    def _decode(path):
+        image_bytes = tf.io.read_file(path)
+        image = tf.io.decode_image(image_bytes, channels=3, expand_animations=False)
+        image = tf.cast(image, tf.float32) / 255.0
+        image.set_shape([None, None, 3])
+        return tf.clip_by_value(image, 0.0, 1.0)
+
+    ds = tf.data.Dataset.from_tensor_slices(paths)
+    if shuffle:
+        ds = ds.shuffle(buffer_size=len(paths), seed=seed, reshuffle_each_iteration=True)
+    ds = ds.map(_decode, num_parallel_calls=tf.data.AUTOTUNE)
+    return make_dataset_from_image_dataset(
+        ds,
+        block_size,
+        batch_size,
+        seed,
+        shuffle,
+        patches_per_image=patches_per_image,
+        augment=augment,
+        center_crop=center_crop,
+        upscale_factor=upscale_factor,
+        degrade_interp=degrade_interp,
+    )
+
+
+def make_dataset_from_cached_tfrecord(
+    tfrecord_path,
+    image_count,
+    block_size,
+    batch_size,
+    seed,
+    shuffle,
+    patches_per_image=1,
+    augment=False,
+    center_crop=False,
+    upscale_factor=4,
+    degrade_interp="bicubic",
+):
+    feature_spec = {
+        "image": tf.io.FixedLenFeature([], tf.string),
+    }
+
+    def _parse(example_proto):
+        parsed = tf.io.parse_single_example(example_proto, feature_spec)
+        image = tf.io.parse_tensor(parsed["image"], out_type=tf.uint8)
+        image = tf.image.convert_image_dtype(image, tf.float32)
+        image.set_shape([None, None, 3])
+        return tf.clip_by_value(image, 0.0, 1.0)
+
+    ds = tf.data.TFRecordDataset(tfrecord_path, num_parallel_reads=tf.data.AUTOTUNE)
+    ds = ds.map(_parse, num_parallel_calls=tf.data.AUTOTUNE)
+    if shuffle:
+        ds = ds.shuffle(buffer_size=max(1, int(image_count)), seed=seed, reshuffle_each_iteration=True)
+    return make_dataset_from_image_dataset(
+        ds,
+        block_size,
+        batch_size,
+        seed,
+        shuffle,
+        patches_per_image=patches_per_image,
+        augment=augment,
+        center_crop=center_crop,
+        upscale_factor=upscale_factor,
+        degrade_interp=degrade_interp,
+    )
+
+
+def make_dataset_from_real_split(
+    paths,
+    cache_info,
+    block_size,
+    batch_size,
+    seed,
+    shuffle,
+    patches_per_image=1,
+    augment=False,
+    center_crop=False,
+    upscale_factor=4,
+    degrade_interp="bicubic",
+):
+    if cache_info and cache_info.get("enabled") and cache_info.get("tfrecord_path"):
+        return make_dataset_from_cached_tfrecord(
+            cache_info["tfrecord_path"],
+            cache_info.get("num_images", len(paths)),
+            block_size,
+            batch_size,
+            seed,
+            shuffle,
+            patches_per_image=patches_per_image,
+            augment=augment,
+            center_crop=center_crop,
+            upscale_factor=upscale_factor,
+            degrade_interp=degrade_interp,
+        )
+    return make_dataset_from_paths(
+        paths,
+        block_size,
+        batch_size,
+        seed,
+        shuffle,
+        patches_per_image=patches_per_image,
+        augment=augment,
+        center_crop=center_crop,
+        upscale_factor=upscale_factor,
+        degrade_interp=degrade_interp,
+    )
 
 
 def make_dataset_from_tensor(images, block_size, batch_size, seed, shuffle):
@@ -428,9 +728,9 @@ def build_explicit_split_datasets(args):
     if min(len(train_paths), len(val_paths), len(test_paths)) <= 0:
         raise ValueError("Explicit split directories must each contain at least one supported image file")
 
-    train_paths, train_skipped = filter_paths_by_min_size(train_paths, args.block_size)
-    val_paths, val_skipped = filter_paths_by_min_size(val_paths, args.block_size)
-    test_paths, test_skipped = filter_paths_by_min_size(test_paths, args.block_size)
+    train_paths, train_skipped, train_cache = maybe_prepare_real_image_cache(train_paths, args.block_size, args.cache_dir, "train")
+    val_paths, val_skipped, val_cache = maybe_prepare_real_image_cache(val_paths, args.block_size, args.cache_dir, "validation")
+    test_paths, test_skipped, test_cache = maybe_prepare_real_image_cache(test_paths, args.block_size, args.cache_dir, "test")
     all_skipped = train_skipped + val_skipped + test_skipped
     if all_skipped:
         undersized = sum(1 for r in all_skipped if r["reason"] == "undersized")
@@ -447,8 +747,9 @@ def build_explicit_split_datasets(args):
         )
 
     return (
-        make_dataset_from_paths(
+        make_dataset_from_real_split(
             train_paths,
+            train_cache,
             args.block_size,
             args.batch_size,
             args.seed,
@@ -459,8 +760,9 @@ def build_explicit_split_datasets(args):
             upscale_factor=args.upscale_factor,
             degrade_interp=args.degrade_interp,
         ),
-        make_dataset_from_paths(
+        make_dataset_from_real_split(
             val_paths,
+            val_cache,
             args.block_size,
             args.batch_size,
             args.seed,
@@ -471,8 +773,9 @@ def build_explicit_split_datasets(args):
             upscale_factor=args.upscale_factor,
             degrade_interp=args.degrade_interp,
         ),
-        make_dataset_from_paths(
+        make_dataset_from_real_split(
             test_paths,
+            test_cache,
             args.block_size,
             args.batch_size,
             args.seed,
@@ -500,6 +803,12 @@ def build_explicit_split_datasets(args):
             "block_size": int(args.block_size),
             "upscale_factor": int(max(1, int(args.upscale_factor))),
             "degrade_interp": args.degrade_interp,
+            "cache": {
+                "enabled": bool(args.cache_dir),
+                "train": summarize_cache_info(train_cache),
+                "validation": summarize_cache_info(val_cache),
+                "test": summarize_cache_info(test_cache),
+            },
         },
     )
 
@@ -532,11 +841,20 @@ def build_datasets(args):
         )
 
     rng = np.random.default_rng(args.seed)
+    cache_dir = str(args.cache_dir or "")
     image_paths = collect_image_paths(args.data_dir)
     if args.real_file_limit > 0:
         image_paths = image_paths[: args.real_file_limit]
 
-    image_paths, skipped_records = filter_paths_by_min_size(image_paths, args.block_size)
+    if cache_dir:
+        image_paths, skipped_records, _ = maybe_prepare_real_image_cache(
+            image_paths,
+            args.block_size,
+            cache_dir,
+            "all_paths",
+        )
+    else:
+        image_paths, skipped_records = filter_paths_by_min_size(image_paths, args.block_size)
     if skipped_records:
         undersized = sum(1 for r in skipped_records if r["reason"] == "undersized")
         corrupt = sum(1 for r in skipped_records if r["reason"] == "corrupt_or_unreadable")
@@ -548,10 +866,38 @@ def build_datasets(args):
 
     if len(image_paths) >= 3:
         train_idx, val_idx, test_idx = split_indices(len(image_paths), args.val_ratio, args.test_ratio, rng)
-        train_samples = int(len(train_idx) * max(1, int(args.train_patches_per_image)))
-        return (
-            make_dataset_from_paths(
+        if cache_dir:
+            train_paths, train_skipped, train_cache = maybe_prepare_real_image_cache(
                 image_paths[train_idx],
+                args.block_size,
+                cache_dir,
+                "train",
+            )
+            val_paths, val_skipped, val_cache = maybe_prepare_real_image_cache(
+                image_paths[val_idx],
+                args.block_size,
+                cache_dir,
+                "validation",
+            )
+            test_paths, test_skipped, test_cache = maybe_prepare_real_image_cache(
+                image_paths[test_idx],
+                args.block_size,
+                cache_dir,
+                "test",
+            )
+        else:
+            train_paths = image_paths[train_idx]
+            val_paths = image_paths[val_idx]
+            test_paths = image_paths[test_idx]
+            train_skipped, val_skipped, test_skipped = [], [], []
+            train_cache = make_disabled_cache_info("train", len(train_paths))
+            val_cache = make_disabled_cache_info("validation", len(val_paths))
+            test_cache = make_disabled_cache_info("test", len(test_paths))
+        split_skipped_records = train_skipped + val_skipped + test_skipped
+        return (
+            make_dataset_from_real_split(
+                train_paths,
+                train_cache,
                 args.block_size,
                 args.batch_size,
                 args.seed,
@@ -562,8 +908,9 @@ def build_datasets(args):
                 upscale_factor=args.upscale_factor,
                 degrade_interp=args.degrade_interp,
             ),
-            make_dataset_from_paths(
-                image_paths[val_idx],
+            make_dataset_from_real_split(
+                val_paths,
+                val_cache,
                 args.block_size,
                 args.batch_size,
                 args.seed,
@@ -574,8 +921,9 @@ def build_datasets(args):
                 upscale_factor=args.upscale_factor,
                 degrade_interp=args.degrade_interp,
             ),
-            make_dataset_from_paths(
-                image_paths[test_idx],
+            make_dataset_from_real_split(
+                test_paths,
+                test_cache,
                 args.block_size,
                 args.batch_size,
                 args.seed,
@@ -588,21 +936,33 @@ def build_datasets(args):
             ),
             {
                 "source": "filesystem",
-                "train": train_samples,
-                "validation": int(len(val_idx)),
-                "test": int(len(test_idx)),
-                "train_images": int(len(train_idx)),
-                "val_images": int(len(val_idx)),
-                "test_images": int(len(test_idx)),
-                "skipped_images_count": int(len(skipped_records)),
-                "skipped_images_undersized": int(sum(1 for r in skipped_records if r["reason"] == "undersized")),
-                "skipped_images_corrupt": int(sum(1 for r in skipped_records if r["reason"] == "corrupt_or_unreadable")),
+                "train": int(len(train_paths) * max(1, int(args.train_patches_per_image))),
+                "validation": int(len(val_paths)),
+                "test": int(len(test_paths)),
+                "train_images": int(len(train_paths)),
+                "val_images": int(len(val_paths)),
+                "test_images": int(len(test_paths)),
+                "skipped_images_count": int(len(skipped_records) + len(split_skipped_records)),
+                "skipped_images_undersized": int(
+                    sum(1 for r in skipped_records if r["reason"] == "undersized")
+                    + sum(1 for r in split_skipped_records if r["reason"] == "undersized")
+                ),
+                "skipped_images_corrupt": int(
+                    sum(1 for r in skipped_records if r["reason"] == "corrupt_or_unreadable")
+                    + sum(1 for r in split_skipped_records if r["reason"] == "corrupt_or_unreadable")
+                ),
                 "train_patches_per_image": int(max(1, int(args.train_patches_per_image))),
                 "block_size": int(args.block_size),
                 "upscale_factor": int(max(1, int(args.upscale_factor))),
                 "degrade_interp": args.degrade_interp,
                 "input_resolution": [int(max(8, args.block_size // max(1, args.upscale_factor))), int(max(8, args.block_size // max(1, args.upscale_factor)))],
                 "target_resolution": [int(args.block_size), int(args.block_size)],
+                "cache": {
+                    "enabled": bool(args.cache_dir),
+                    "train": summarize_cache_info(train_cache),
+                    "validation": summarize_cache_info(val_cache),
+                    "test": summarize_cache_info(test_cache),
+                },
             },
         )
 
@@ -1115,6 +1475,15 @@ def main():
     print(f"[+] Target output JPEG ratio (Q{args.target_output_jpeg_quality}): {args.target_output_jpeg_ratio:.3f}")
     print(f"[+] Residual scale: {args.residual_scale:.3f}")
     print(f"[+] Gradient clipnorm: {args.grad_clipnorm:.3f}")
+    cache_summary = split_info.get("cache")
+    if isinstance(cache_summary, dict) and cache_summary.get("enabled"):
+        for split_name in ("train", "validation", "test"):
+            info = cache_summary.get(split_name)
+            if isinstance(info, dict):
+                print(
+                    f"[+] Cache {split_name}: status={info.get('status', 'unknown')} "
+                    f"images={int(info.get('num_images', 0))} path={info.get('tfrecord_path', '')}"
+                )
     if size_metrics.get("sample_count", 0) > 0:
         print(f"[+] Input->Target PSNR: {float(size_metrics.get('input_psnr_to_target', float('nan'))):.3f}")
         print(f"[+] Output->Target PSNR: {float(size_metrics.get('output_psnr_to_target', float('nan'))):.3f}")

@@ -23,6 +23,20 @@ python src/training/train_autoencoder_video_local.py --params-file documentation
 python src/training/train_upscaler_image_local.py --params-file documentation/model_params_example.json --data-dir data/ImageData/archive --real-only --no-export-tflite
 ```
 
+## Image trainer data cache (Milestone 4)
+
+`train_autoencoder_image_local.py` now supports an optional on-disk decoded-tensor cache for real-image runs:
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `--cache-dir <path>` | off | Writes/reads TFRecord-backed image tensors for each real-data split (`train`, `validation`, `test`) so repeated runs can skip re-decoding unchanged source images. |
+
+Notes:
+
+- The cache is **opt-in** and leaves prior behavior unchanged when omitted.
+- Cache entries are keyed by split membership plus the requested `block_size`, and the key hashes each source file's path, size, and `mtime`, so changing the underlying image set automatically invalidates the old cache.
+- Run reports surface the cache status under `split_info.cache.*` (`built`, `hit`, or `disabled`) along with the TFRecord/manifest paths.
+
 ## Image lossy trainer: real vs proxy compression metrics (Milestone 1)
 
 `evaluation_report.md` from `train_autoencoder_image_lossy_local.py` distinguishes two families of size metrics:

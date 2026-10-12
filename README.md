@@ -85,6 +85,12 @@ Train image on real data only (crop-based patch expansion, no dummy fallback):
 python src/training/train_autoencoder_image_local.py --preset m1-air-quality --data-dir data/ImageData --real-only --train-patches-per-image 6 --upscale-factor 2 --degrade-interp bicubic --target-psnr 60 --output-root models/image_real_only
 ```
 
+To reuse decoded real-image tensors across repeated runs, add an opt-in cache directory:
+
+```zsh
+python src/training/train_autoencoder_image_local.py --preset custom --data-dir data/ImageData/archive --real-only --epochs 8 --batch-size 4 --block-size 64 --cache-dir models/cache/image --no-export-tflite --output-root models/image_cached_local
+```
+
 Train image with explicit split folders and external holdout (no split leakage):
 
 ```zsh

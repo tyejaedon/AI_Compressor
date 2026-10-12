@@ -17,6 +17,7 @@ They complement, not replace:
 
 ## Quick-start checklist
 
+- [ ] Check `git status --branch` and switch/create an issue-scoped topic branch before editing (`feat/*`, `fix/*`, `docs/*`, etc.); if edits already began on `master`, branch immediately before continuing.
 - [ ] Identify the modality: image, audio, video, or cross-cutting pipeline/reporting.
 - [ ] Identify the roadmap milestone or issue family, if any.
 - [ ] Read the matching skill file below before editing code.

@@ -48,11 +48,12 @@ For milestone work, model changes, and task scoping, use the repo-specific playb
 
 ### Task routing quick-start
 
-1. **Identify the modality and milestone first** using `documentation/*_PIPELINE_ROADMAP.md`.
-2. **Read the matching skill file before editing code** so flag/report/test expectations stay aligned.
-3. **Trace every changed CLI flag end-to-end**: trainer → params-file docs → random search/pipeline → smoke test.
-4. **Preserve published defaults unless the task explicitly changes benchmarks**; call such changes out in the PR.
-5. **Validate with the narrowest relevant smoke test(s)** before proposing the change.
+1. **Start on a topic branch, never `master`.** Before editing, check `git status --branch` and switch/create an issue-scoped branch such as `feat/issue-17-image-cache`, `fix/audio-nan-loss`, or `docs/params-file-guide`. If you already have local edits on `master`, create the topic branch immediately before continuing.
+2. **Identify the modality and milestone first** using `documentation/*_PIPELINE_ROADMAP.md`.
+3. **Read the matching skill file before editing code** so flag/report/test expectations stay aligned.
+4. **Trace every changed CLI flag end-to-end**: trainer → params-file docs → random search/pipeline → smoke test.
+5. **Preserve published defaults unless the task explicitly changes benchmarks**; call such changes out in the PR.
+6. **Validate with the narrowest relevant smoke test(s)** before proposing the change.
 
 ## Ground rules for agents
 
@@ -71,6 +72,7 @@ For milestone work, model changes, and task scoping, use the repo-specific playb
 5. **Follow branch/commit conventions** in `CONTRIBUTING.md` (Conventional Commits,
    `feat/*`, `fix/*`, `chore/*`, `docs/*` branch prefixes). Never commit to `master`
    directly — always open a PR.
+   - Practical agent rule: verify/switch branches at the very beginning of the task, not after edits are complete.
 6. **Update docs alongside behavior changes.** If you add/change a CLI flag, update
    the relevant section of `README.md` and/or `documentation/*.md`.
 7. **Don't silently change default hyperparameters** for existing presets — these
