@@ -32,6 +32,28 @@ for iteration on a single laptop (Apple Silicon / M1), not for cloud-scale train
 | `src/training/param_overrides.py` | Shared param/override plumbing used by trainers. |
 | `data/`, `models/` (gitignored) | Local datasets and training artifacts — **never commit these**. |
 
+## Agent skills library
+
+For milestone work, model changes, and task scoping, use the repo-specific playbooks in
+`agent_skills/` alongside this file:
+
+- `agent_skills/README.md` — entry point and routing guide.
+- `agent_skills/milestone-delivery.md` — how to turn roadmap milestones/issues into scoped PRs.
+- `agent_skills/milestone_templates/*.md` — numbered milestone-family templates keyed to `M1/A1/V1` through `M5/A5/V5`.
+- `agent_skills/compression-models.md` — cross-modality patterns for trainer, metric, and flag changes.
+- `agent_skills/image-modality.md` — image/lossy/upscaler context and milestone file map.
+- `agent_skills/audio-modality.md` — audio trainer, dataset prep, and streaming roadmap context.
+- `agent_skills/video-modality.md` — video trainer, temporal roadmap, and decode constraints.
+- `agent_skills/pipeline-reporting.md` — production pipeline, random search, bundling, and reporting sync points.
+
+### Task routing quick-start
+
+1. **Identify the modality and milestone first** using `documentation/*_PIPELINE_ROADMAP.md`.
+2. **Read the matching skill file before editing code** so flag/report/test expectations stay aligned.
+3. **Trace every changed CLI flag end-to-end**: trainer → params-file docs → random search/pipeline → smoke test.
+4. **Preserve published defaults unless the task explicitly changes benchmarks**; call such changes out in the PR.
+5. **Validate with the narrowest relevant smoke test(s)** before proposing the change.
+
 ## Ground rules for agents
 
 1. **Never commit large binaries or generated artifacts**: no `data/`, `models/`,
