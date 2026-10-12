@@ -8,6 +8,10 @@ iteration on a single laptop (M1). Entry points are CLI scripts organized under
 `src/{training,pipeline,reporting,audio}/`, not an installable package/module —
 everything is run via `python src/.../<script>.py --flags`.
 
+For milestone or modality-specific work, start with `agent_skills/README.md`, the
+matching numbered template in `agent_skills/milestone_templates/`, and the relevant
+playbook in `agent_skills/*.md`, then use `AGENT.md` for the full repo rules.
+
 ## Setup & run
 ```zsh
 python3 -m venv .venv && source .venv/bin/activate
@@ -41,4 +45,6 @@ python tests/smoke/smoke_test_video_local.py
 - Update `README.md` / `documentation/*.md` when adding or renaming CLI flags.
 - Keep pipeline scripts (`src/pipeline/run_full_production_pipeline.py`) in sync if you rename flags
   in the scripts they call.
+- For roadmap work, map the task to a milestone in `documentation/{IMAGE,AUDIO,VIDEO}_PIPELINE_ROADMAP.md`
+  before changing code so validation and follow-on files are easy to identify.
 
