@@ -23,6 +23,7 @@ Train image: `python src/training/train_autoencoder_image_local.py --preset m1-a
 Smoke tests (fast, tiny data/epochs): `python tests/smoke/smoke_test_*.py`
 
 ## Conventions to follow
+- Before editing, verify you are not on `master` and switch/create an issue-scoped topic branch first (for example `feat/issue-17-image-cache`, `fix/audio-nan-loss`, `docs/params-file-guide`). If work already started on `master`, create the branch immediately before continuing.
 - Branch names: `feat/*`, `fix/*`, `chore/*`, `docs/*`.
 - Commits: Conventional Commits (`feat: …`, `fix: …`, `chore: …`).
 - Never commit `data/`, `models/`, `*.h5`, `*.keras`, `*.tflite`, `__pycache__/`.
