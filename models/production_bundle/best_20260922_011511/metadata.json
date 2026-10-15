@@ -1,0 +1,6 @@
+{
+  "created_at_utc": "2026-09-21T22:15:11.723462Z",
+  "bundle_dir": "/Users/tyejaedon/PycharmProjects/AI_Compressor/models/production_bundle/best_20260922_011511",
+  "selection_strategy": "highest test_metrics.psnr_metric per modality",
+  "models": {}
+}

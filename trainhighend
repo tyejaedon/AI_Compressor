@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# High-End Neural Compression Trainer Entry Point
+set -euo pipefail
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PYTHON="$DIR/.venv/bin/python"
+if [[ ! -x "$PYTHON" ]]; then
+    PYTHON="python3"
+fi
+exec "$PYTHON" "$DIR/trainhighend.py" "$@"

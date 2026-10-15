@@ -6,31 +6,31 @@ Local-first neural compression project with autoencoders for image, audio, and v
 
 Traditional codecs (JPEG/MP3/H.264) are hand-engineered. Neural compression learns compact latent representations with an encoder/decoder and optimizes reconstruction quality directly for your target data and constraints.
 
-## Current benchmark snapshot (July 2026)
+## Current benchmark snapshot (October 2026)
 
-| Modality | Test PSNR | Test MSE | Test Loss | Test SSIM/SNR |
-|----------|----------:|---------:|----------:|--------------:|
-| Image    |    30.645 |    0.001 |     0.004 |    SSIM 0.983 |
-| Audio    |    32.223 |    0.001 |     0.024 | SNR 21.981 dB |
-| Video    |    30.423 |    0.001 |     0.014 |    SSIM 0.898 |
+| Modality / Task | Test PSNR | Test MSE | Test Loss | Test SSIM/SNR | Key Focus / Baseline |
+|:----------------|----------:|---------:|----------:|--------------:|:---------------------|
+| Image (Standard Super-Res) | 72.518 dB | 8.225e-08 | 2.640e-05 | SSIM 0.999999 | 2x Bicubic restoration |
+| Image (Lossy Rate-Distortion) | 25.676 dB | 0.00321 | 0.01361 | SSIM 0.9123 | 18.47 bpp, 0.829x JPEG ratio |
+| Image (Learned Upscaler) | 26.338 dB | 0.00267 | 0.01947 | SSIM 0.8855 | Outperforms Bicubic (0.8705) |
+| Audio (Waveform Autoencoder) | 32.223 dB | 0.00100 | 0.02400 | SNR 21.981 dB | Multi-scale spectral recon |
+| Video (Spatio-Temporal AE) | 30.423 dB | 0.00100 | 0.01400 | SSIM 0.8980 | 3D conv latent compression |
 
 Average across best models:
 
-- Test PSNR: **31.097**
-- Best validation PSNR: **31.213**
-- Final training PSNR: **29.391**
+- Test PSNR: **37.436 dB**
+- Lossy & Generative average PSNR (Audio, Video, Lossy Image, Upscaler): **28.665 dB**
 
 ## Model Hyperparameters
-Best model hyperparameters for each modality (from the current best runs):
+Best model hyperparameters for each modality and architecture (from high-end benchmark configurations):
 
-| Modality | Latent Dim | Encoder Depth | Decoder Depth | Learning Rate | Batch Size | Epochs |
-|:---------|-----------:|--------------:|--------------:|--------------:|-----------:|-------:|
-| Image    |        128 |             4 |             4 |         0.001 |         32 |     50 |
-| Audio    |         64 |             3 |             3 |        0.0005 |         16 |     50 |
-| Video    |        192 |             5 |             5 |        0.0001 |          8 |     15 |
-
-
-
+| Modality / Task | Latent Dim / Channels | Filters / ResBlocks | Learning Rate | Batch Size | Epochs | Optimization / Notes |
+|:----------------|----------------------:|--------------------:|--------------:|-----------:|-------:|:---------------------|
+| Image (Standard Super-Res) | 192 | 64 base filters | 0.00025 | 32 | 12 | 2x upscale, SSIM + Charbonnier loss |
+| Image (Lossy Rate-Distortion) | 48 | 32 base filters | 0.00025 | 32 | 6 | Rate-lambda 0.0006, 8-bit QAT, entropy coding |
+| Image (Learned Upscaler) | N/A | 40 filters, 5 resblocks | 0.00025 | 32 | 7 | 2x pixel shuffle, residual blocks |
+| Audio (Waveform AE) | 64 | 48 base filters | 0.00050 | 16 | 50 | 1D conv, multi-scale spectral loss |
+| Video (Spatio-Temporal AE) | 192 | 24 base filters | 0.00010 | 8 | 15 | 3D conv spatio-temporal encoder |
 
 ## Training Metrics  (x-axis : Epochs)
 ### Image Model:
@@ -50,13 +50,15 @@ preview of reconstruction quality for best models on test data, showing original
 
 ### Audio:
 ![audio_reconstruction.png](models/production_bundle/best_20260702_235656/audio/audio_preview_waveform.png)
-Playback audio: [audio_preview_reconstruction.wav](models/production_bundle/best_20260702_235656/audio/audio_preview_reconstruction.wav)
+Playback audio: [audio_preview_reconstruction.wav](models/production_bundle/best_20260702_235656/audio/audio_preview_waveform.wav)
 ### Video:
 ![video_reconstruction.png](models/production_bundle/best_20260702_235656/video/video_preview_reconstruction.png)
 
 Source reports:
 
-- `models/random_search_goal30/image/trial_001/20260702_230938/evaluation_report.md`
+- `models/highend_run/20261013_231532/image_standard/20261013_231537/evaluation_report.md`
+- `models/highend_run/20261013_232606/image_lossy/20261013_235837/evaluation_report.md`
+- `models/highend_run/20261014_013253/image_upscaler/20261014_013303/upscaler_evaluation_report.md`
 - `models/random_search_goal30/audio/trial_001/20260702_182301/audio_evaluation_report.md`
 - `models/random_search_goal30/video/trial_001/20260702_183130/video_evaluation_report.md`
 
@@ -71,7 +73,26 @@ pip install -r requirements.txt
 
 ## Core commands
 
-For easier model configuration, all autoencoder trainers now support `--params-file` (JSON). See `documentation/MODEL_PARAMS_INPUT.md` and `documentation/model_params_example.json`.
+### High-End Multi-Modality Orchestrator (`trainhighend`)
+
+Execute high-end training pipelines across all modalities with optimal hyperparameter selection:
+
+```zsh
+# Inspect pipeline plan without training
+./trainhighend --dry-run
+
+# Run high-end training for a specific modality
+./trainhighend --only image_standard
+./trainhighend --only image_lossy
+./trainhighend --only image_upscaler
+./trainhighend --only audio
+./trainhighend --only video
+
+# Run all jobs with scaled epochs (e.g. 50% for faster smoke iteration)
+./trainhighend --epochs-scale 0.5 --output-root models/highend_run
+```
+
+For easier model configuration, all autoencoder trainers also support `--params-file` (JSON). See `documentation/MODEL_PARAMS_INPUT.md` and `documentation/model_params_example.json`.
 
 Train image:
 
@@ -208,4 +229,3 @@ On stronger GPUs/cloud, prioritize:
 3. Higher-fidelity inputs (bigger image patches, longer audio clips, larger video clips).
 4. Broader/parallel hyperparameter search.
 5. Deployment metrics (latency, memory, throughput) in addition to PSNR/SSIM/SNR.
-
