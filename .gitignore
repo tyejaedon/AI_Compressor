@@ -30,3 +30,14 @@ models/tuned_runs/.DS_Store
 models/random_search_full/.DS_Store
 models/production_bundle/best_20260702_235656/video/video_model.weights.h5
 *.h5
+*.pt
+*.pth
+*.onnx
+*.bin
+*.ckpt
+*.safetensors
+*.tfrecord
+*.log
+models/smoke_test/
+models/smoke_test_image_lossy/
+models/timeboxed_run/

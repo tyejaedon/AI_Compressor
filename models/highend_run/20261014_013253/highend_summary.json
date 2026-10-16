@@ -1,0 +1,41 @@
+{
+  "timestamp": "2026-10-14T00:13:37.231464Z",
+  "total_duration_minutes": 3.56,
+  "jobs": [
+    {
+      "job": "image_upscaler",
+      "status": "ok",
+      "duration_seconds": 213.41,
+      "report_path": "/Users/tyejaedon/PycharmProjects/AI_Compressor/models/highend_run/20261014_013253/image_upscaler/20261014_013324/upscaler_evaluation_report.md",
+      "metrics": {
+        "psnr": 26.3378849029541,
+        "mse": 0.0026747777592390776,
+        "loss": 0.01946624554693699,
+        "ssim": 0.8855071067810059,
+        "snr_db": null,
+        "bicubic_psnr": 26.36417158090385,
+        "bicubic_ssim": 0.870505374328346
+      },
+      "hyperparams": {
+        "preset": "custom",
+        "data_dir": "",
+        "use_cifar10": true,
+        "cifar_train_limit": 20000,
+        "cifar_test_limit": 5000,
+        "block_size": 32,
+        "upscale_factor": 2,
+        "degrade_interp": "bicubic",
+        "model_base_filters": 40,
+        "model_kernel_size": 3,
+        "num_residual_blocks": 5,
+        "batch_size": 32,
+        "epochs": 7,
+        "lr": 0.00025,
+        "target_psnr": 35.0,
+        "sample_count": 8,
+        "no_export_tflite": true,
+        "output_root": "/Users/tyejaedon/PycharmProjects/AI_Compressor/models/highend_run/20261014_013253/image_upscaler"
+      }
+    }
+  ]
+}

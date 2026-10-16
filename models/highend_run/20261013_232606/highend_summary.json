@@ -1,0 +1,44 @@
+{
+  "timestamp": "2026-10-13T21:04:02.955962Z",
+  "total_duration_minutes": 5.6,
+  "jobs": [
+    {
+      "job": "image_lossy",
+      "status": "ok",
+      "duration_seconds": 336.15,
+      "report_path": "/Users/tyejaedon/PycharmProjects/AI_Compressor/models/highend_run/20261013_232606/image_lossy/20261013_232610/evaluation_report.md",
+      "metrics": {
+        "psnr": 25.67603302001953,
+        "mse": 0.003210002789273858,
+        "loss": 0.01360605750232935,
+        "ssim": 0.9122816324234009,
+        "snr_db": null,
+        "bpp": 18.471637729077806,
+        "entropy_bytes": 2364.369629321959
+      },
+      "hyperparams": {
+        "preset": "custom",
+        "use_cifar10": true,
+        "block_size": 32,
+        "latent_dim": 48,
+        "model_base_filters": 32,
+        "model_kernel_size": 3,
+        "batch_size": 32,
+        "epochs": 6,
+        "lr": 0.00025,
+        "rate_loss_mode": "entropy",
+        "rate_lambda": 0.0006,
+        "latent_bit_depth": 8,
+        "quant_noise_anneal": true,
+        "enable_entropy_coding": true,
+        "entropy_coding_samples": 16,
+        "jpeg_quality": 85,
+        "sample_count": 32,
+        "target_psnr": 60.0,
+        "run_baseline_benchmark": true,
+        "no_export_tflite": true,
+        "output_root": "/Users/tyejaedon/PycharmProjects/AI_Compressor/models/highend_run/20261013_232606/image_lossy"
+      }
+    }
+  ]
+}
