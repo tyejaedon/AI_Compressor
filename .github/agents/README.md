@@ -26,13 +26,23 @@ If a task is unclear, start with `repo-task-router.agent.md` and hand off from t
 - `image-training-implementer.agent.md`
   - Image, image-lossy, and upscaler trainer work.
 - `audio-training-implementer.agent.md`
-  - Audio training, dataset preparation, and audio-specific validation work.
+  - Audio training, dataset preparation, and general audio validation work.
 - `video-training-implementer.agent.md`
   - Video training, temporal/decode changes, and video-specific validation work.
 - `compression-models-implementer.agent.md`
   - Cross-modality architecture, losses, metrics, quantization, and compression-accounting changes.
 - `pipeline-reporting-implementer.agent.md`
   - Random search, production pipeline, bundling, pruning, reporting, and cross-cutting flag-sync work.
+
+### 5. Milestone-specialized audio agents
+- `audio-a1-compression-accounting.agent.md`
+  - Audio Milestone A1: Latent vector bit-depth quantization, straight-through estimator (STE), actual bytes/clip measurement, and real vs. theoretical reporting.
+- `audio-a2-streaming-compression.agent.md`
+  - Audio Milestone A2: Real-time chunked/overlap-add inference pipeline for the trained autoencoder and streaming smoke test.
+- `audio-a3-perceptual-loss.agent.md`
+  - Audio Milestone A3: Mel-scale spectral loss, A-weighting frequency sensitivity, `--loss-profile` presets, and perceptual evaluation.
+- `audio-a4-robustness-implementer.agent.md`
+  - Audio Milestone A4: Explicit stereo/multi-channel modes, polyphase resampling, additive noise augmentation, and corrupted audio input robustness.
 
 ## Quick routing guide
 
@@ -42,6 +52,7 @@ Use:
 - `compression-models-implementer.agent.md` if the task changes compression behavior across one or more modalities.
 - `pipeline-reporting-implementer.agent.md` if the task changes reports, plots, bundling, pruning, random search, or pipeline callers.
 - A modality implementer if the task is clearly image, audio, or video specific.
+- The milestone-specialized audio agents (`audio-a1-compression-accounting.agent.md`, `audio-a2-streaming-compression.agent.md`, `audio-a3-perceptual-loss.agent.md`, `audio-a4-robustness-implementer.agent.md`) when executing roadmap issues from `documentation/AUDIO_PIPELINE_ROADMAP.md`.
 - `jetbrains-agent-navigator.agent.md` if the question is about IDE behavior, Agent mode, Inline Agent mode, or whether specialized subagents should appear in the UI.
 
 ## Repo rules these agents are designed to follow
@@ -66,4 +77,3 @@ Across the lineup, the common expectations are:
 3. Hand off to the appropriate implementation agent.
 4. Run the relevant smoke test(s) for the touched area.
 5. Update `README.md` or `documentation/*.md` if user-facing behavior changed.
-
