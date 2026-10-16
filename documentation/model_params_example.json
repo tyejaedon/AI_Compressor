@@ -31,6 +31,8 @@
   "audio": {
     "preset": "custom",
     "latent_dim": 320,
+    "latent_bit_depth": 0,
+    "quant_noise_anneal": false,
     "model_base_filters": 48,
     "model_kernel_size": 7,
     "batch_size": 10,
@@ -57,4 +59,3 @@
     "width": 64
   }
 }
-

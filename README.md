@@ -153,7 +153,11 @@ python src/reporting/upscale_reconstructed_images.py --model models/local_run/<r
 Train audio:
 
 ```zsh
+# Baseline unquantized training (float32 latent representation)
 python src/training/train_autoencoder_audio_local.py --preset m1-air-balanced --output-root models/audio_local_run
+
+# Milestone A1: Quantization-Aware Training (QAT) with 8-bit discrete latent quantization and noise annealing
+python src/training/train_autoencoder_audio_local.py --preset m1-air-balanced --latent-bit-depth 8 --quant-noise-anneal --output-root models/audio_local_run
 ```
 
 Prepare canonical audio dataset (mp3/flac/ogg/wav -> mono PCM16 WAV + metadata):
@@ -199,6 +203,7 @@ Smoke test:
 python tests/smoke/smoke_test_random_search.py
 python tests/smoke/smoke_test_image_lossy_local.py
 python tests/smoke/smoke_test_upscaler_local.py
+python tests/smoke/smoke_test_audio_local.py
 python tests/smoke/smoke_test_prepare_audio_dataset.py
 python tests/smoke/smoke_test_full_production_pipeline.py
 ```

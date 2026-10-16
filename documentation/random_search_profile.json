@@ -44,6 +44,7 @@
     "audio": {
       "preset": "custom",
       "latent_dim": [160, 224, 320, 384, 512],
+      "latent_bit_depth": [0, 8],
       "model_base_filters": [32, 40, 48, 56],
       "model_kernel_size": [3, 5, 7],
       "batch_size": [8, 10, 12, 16],
@@ -213,6 +214,7 @@
     },
     "audio": [
       "latent_dim",
+      "latent_bit_depth",
       "model_base_filters",
       "model_kernel_size",
       "batch_size",
@@ -233,4 +235,3 @@
     ]
   }
 }
-
