@@ -61,6 +61,21 @@ New `image_lossy` flags (all default to preserving prior behavior):
 | `--latent-bit-depth {4,6,8,10}` | `8` | Quantization bit-depth for the latent bottleneck (Milestone 2). |
 | `--quant-noise-anneal` | off | Fade additive quantization noise from full strength to zero over training (QAT-style annealing, Milestone 2). |
 
+## Audio trainer: real vs theoretical compression accounting (Milestone A1)
+
+`audio_evaluation_report.md` from `train_autoencoder_audio_local.py` now reports theoretical and measured compression metrics side by side:
+
+- **Theoretical compression ratio** (`estimated_input_to_latent_ratio`, `theoretical.latent_bits_per_clip`): compares raw PCM bit size (`clip_len * 16 bits`) against an assumed latent bit allocation (`latent_dim * latent_bits`). This metric preserves backward compatibility with baseline reports.
+- **Actual compressed bytes per clip** (`actual_latent_bytes_per_clip`, `actual_compression_ratio`): measured by encoding empirical test latents through a static range coder and calculating Shannon entropy (`actual.entropy_bits_per_dim`). When latent quantization is disabled, reports the true float32 latent cost (`latent_dim * 4 bytes/clip`).
+- **Quantization-Aware Training (QAT)**: `--latent-bit-depth` (e.g. `8`) inserts a `StraightThroughQuantize` layer after the linear bottleneck, allowing gradients to flow back via straight-through estimation (STE) during forward/backward passes.
+
+New `audio` flags (all default to preserving prior behavior):
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `--latent-bit-depth <int>` | `0` (disabled/float32) | Discrete quantization bit-depth for the latent vector (e.g. `8` for 256 levels). When `0`, leaves the latent as standard unquantized float32. |
+| `--quant-noise-anneal` | off | Linearly fades additive quantization noise from full strength to zero across training epochs so the network smoothly adapts to discrete levels. |
+
 ## Learned image upscaler (Milestone 3)
 
 `train_upscaler_image_local.py` trains a small residual CNN + sub-pixel (depth-to-space) upsampler on the
@@ -73,4 +88,3 @@ use a trained upscaler model in place of plain BICUBIC resizing via `--learned-u
 with `--upscaler-tile-size`/`--upscaler-tile-overlap` bounding memory use on large images via overlapping,
 blended tiles. If no learned model path is given (or it fails to load), it falls back to BICUBIC with a
 warning.
-

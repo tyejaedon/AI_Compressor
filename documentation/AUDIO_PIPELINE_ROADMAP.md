@@ -10,13 +10,13 @@ in `src/training/random_search_hyperparams.py` / `src/training/param_overrides.p
 
 | Area | Today |
 |---|---|
-| Architecture | Conv1D encoder (4 stages, stride-2, 16× downsample) → linear Dense bottleneck (no ReLU, preserves signed/phase-continuous values) → Conv1DTranspose decoder (16× upsample, no skip connections) → tanh output. |
+| Architecture | Conv1D encoder (4 stages, stride-2, 16× downsample) → linear Dense bottleneck (no ReLU, preserves signed/phase-continuous values) → Conv1DTranspose decoder (16× upsample, no skip connections) → tanh output. Optional STE `StraightThroughQuantize` layer after bottleneck when `--latent-bit-depth > 0`. |
 | Data pipeline | `src/audio/prepare_audio_dataset.py` canonicalizes mp3/flac/ogg/m4a/aac/opus/wav → mono PCM16 WAV at a target sample rate with `none/peak/rms/rms_peak` normalization + JSON sidecar metadata. Trainer loads canonical WAVs, mono-downmixes, resamples via linear interpolation, pads/crops to a fixed `clip_len = sample_rate * clip_seconds`. |
-| Compression accounting | **Theoretical only**: `estimate_audio_compression_ratio()` compares `clip_len*16 bits` vs `latent_dim*latent_bits` — the latent is **never actually quantized or entropy-coded**; it's dense float32 throughout training and export. |
+| Compression accounting | **Real & Theoretical (Milestone A1 Complete)**: Evaluation reports log both `estimated_input_to_latent_ratio` and measured `actual_latent_bytes_per_clip` / `actual_compression_ratio` computed via range coding and empirical Shannon entropy of the latent symbols. Gated behind `--latent-bit-depth` (default 0 / float32). |
 | Loss/metrics | Weighted MSE + L1 + STFT-magnitude loss with a "hard residual" upweighting term; tracks SNR (dB, primary) and PSNR. `TargetSNRCallback` stops early at `--target-snr-db` (default 90). |
 | Real-time path | `src/audio/realtime_audio_vortex_pipeline.py` is a **feature-extraction-only** pipeline (FFT band energies → visual "vortex" control signals for a demo). It does **not** run the trained autoencoder — there is no real-time/streaming inference path for the compression model itself. |
 | Robustness | Mono-only (stereo is downmixed), fixed training sample rate (16 kHz) vs. fixed vortex demo rate (48 kHz), no noise augmentation, silent fallback-to-silence on WAV read failure. |
-| Search & docs | `src/training/random_search_hyperparams.py` samples latent_dim/filters/kernel/batch/epochs/lr/clip_seconds for audio; ranks by `snr_db_metric`. `--params-file` JSON `audio` section documented in `documentation/MODEL_PARAMS_INPUT.md`. |
+| Search & docs | `src/training/random_search_hyperparams.py` samples latent_dim/latent_bit_depth/filters/kernel/batch/epochs/lr/clip_seconds for audio; ranks by `snr_db_metric`. `--params-file` JSON `audio` section documented in `documentation/MODEL_PARAMS_INPUT.md`. |
 
 ## 2. Constraints (do not violate)
 
@@ -28,8 +28,8 @@ in `src/training/random_search_hyperparams.py` / `src/training/param_overrides.p
 
 ## 3. Goals
 
-- **G1 — Real compression accounting**: measure actual bits/sample, not a theoretical ratio.
-- **G2 — Close the QAT gap**: train the model to tolerate the quantization it will actually be deployed with.
+- **G1 — Real compression accounting**: measure actual bits/sample, not a theoretical ratio. [Landed in A1]
+- **G2 — Close the QAT gap**: train the model to tolerate the quantization it will actually be deployed with. [Landed in A1]
 - **G3 — Real-time compression inference**: extend (or add alongside) the vortex pipeline a streaming path that actually runs the trained autoencoder in chunks.
 - **G4 — Perceptual quality**: move beyond waveform/STFT-magnitude loss toward psychoacoustically-informed objectives.
 - **G5 — Robustness & multi-channel/rate support**: stereo, variable sample rate, noisy real-world input.
@@ -37,16 +37,16 @@ in `src/training/random_search_hyperparams.py` / `src/training/param_overrides.p
 
 ## 4. Milestones
 
-### Milestone A1 — Real Compression Accounting & Quantization
+### Milestone A1 — Real Compression Accounting & Quantization (Completed)
 **Objective:** Replace the theoretical bits/latent-dim estimate with a real measured bitrate, and make latent quantization actually happen (not just be assumed for the ratio calc).
 **Why:** `--latent-bits` currently only feeds an arithmetic estimate; the latent is float32 end-to-end, so real deployed file size is unknown and likely far larger than advertised.
-**Exit criteria:** Evaluation report includes an `actual_latent_bytes_per_clip` computed from a real quantization/entropy step, gated behind an opt-in flag that defaults to preserving current behavior.
+**Exit criteria:** Evaluation report includes an `actual_latent_bytes_per_clip` computed from a real quantization/entropy step, gated behind an opt-in flag that defaults to preserving current behavior. *(Achieved)*
 
 Issues:
-1. **[audio/compression] Add real bit-depth quantization of the latent vector** — `--latent-bit-depth` (default disabled/float32) that actually rounds/clips the bottleneck output to N bits before decode.
-2. **[audio/compression] Add straight-through estimator for quantized latent gradients** — so the model can be trained with the quantization in the loop, not just evaluated post-hoc.
-3. **[audio/compression] Add real vs theoretical compression metrics to evaluation report** — log both `estimated_input_to_latent_ratio` (existing) and `actual_latent_bytes_per_clip` / `actual_compression_ratio` side by side.
-4. **[audio/docs] Document real vs theoretical audio compression accounting** — update `README.md` / `documentation/MODEL_PARAMS_INPUT.md`.
+1. **[audio/compression] Add real bit-depth quantization of the latent vector (#25)** — `--latent-bit-depth` (default disabled/float32) that actually rounds/clips the bottleneck output to N bits before decode. *(Completed)*
+2. **[audio/compression] Add straight-through estimator for quantized latent gradients (#26)** — so the model can be trained with the quantization in the loop, not just evaluated post-hoc. *(Completed)*
+3. **[audio/compression] Add real vs theoretical compression metrics to evaluation report (#27)** — log both `estimated_input_to_latent_ratio` (existing) and `actual_latent_bytes_per_clip` / `actual_compression_ratio` side by side. *(Completed)*
+4. **[audio/docs] Document real vs theoretical audio compression accounting (#28)** — update `README.md` / `documentation/MODEL_PARAMS_INPUT.md`. *(Completed)*
 
 ### Milestone A2 — Real-Time Streaming Compression Path
 **Objective:** Give the trained autoencoder an actual streaming/chunked inference path, distinct from the existing vortex feature-extraction demo.
@@ -54,10 +54,10 @@ Issues:
 **Exit criteria:** A new streaming inference module can take arbitrary-length PCM input, process it in `clip_len`-sized (or overlap-add) chunks through a loaded model, and reconstruct output with bounded latency, with a smoke test proving no crash on a short synthetic stream.
 
 Issues:
-1. **[audio/streaming] Design a chunked/overlap-add inference wrapper for the trained autoencoder** — reuse existing fixed `clip_len` constraint; document latency implications.
-2. **[audio/streaming] Add `realtime_audio_compression_pipeline.py`** — mirrors `src/audio/realtime_audio_vortex_pipeline.py`'s streaming buffer conventions but decodes/encodes through the trained model instead of extracting FFT features.
-3. **[audio/streaming] Add a smoke test for streaming inference** — `tests/smoke/smoke_test_realtime_audio_compression.py`, tiny model + short synthetic stream, asserts output shape/latency bounds.
-4. **[audio/docs] Document the real-time compression path and its relationship to the vortex demo** — clarify in README that the vortex pipeline is visualization-only.
+1. **[audio/streaming] Design a chunked/overlap-add inference wrapper for the trained autoencoder (#29)** — reuse existing fixed `clip_len` constraint; document latency implications.
+2. **[audio/streaming] Add `realtime_audio_compression_pipeline.py` (#30)** — mirrors `src/audio/realtime_audio_vortex_pipeline.py`'s streaming buffer conventions but decodes/encodes through the trained model instead of extracting FFT features.
+3. **[audio/streaming] Add a smoke test for streaming inference (#31)** — `tests/smoke/smoke_test_realtime_audio_compression.py`, tiny model + short synthetic stream, asserts output shape/latency bounds.
+4. **[audio/docs] Document the real-time compression path and its relationship to the vortex demo (#32)** — clarify in README that the vortex pipeline is visualization-only.
 
 ### Milestone A3 — Perceptual Quality & Psychoacoustic Loss
 **Objective:** Move the loss function beyond MSE/L1/STFT-magnitude toward perceptually-weighted objectives.
@@ -65,10 +65,10 @@ Issues:
 **Exit criteria:** New optional loss terms are available via `--loss-profile` (mirroring the image trainer's pattern), default profile reproduces current benchmark behavior exactly.
 
 Issues:
-1. **[audio/loss] Add a mel-scale/log-mel spectral loss option** — `--loss-mel-weight`, computed via `tf.signal.linear_to_mel_weight_matrix`.
-2. **[audio/loss] Add an A-weighting (or simplified perceptual weighting) term** — approximate psychoacoustic frequency sensitivity curve applied to the STFT magnitude loss.
-3. **[audio/loss] Introduce `--loss-profile {balanced,snr,perceptual}` presets** — mirrors the image trainer's `--loss-profile` convention; `balanced` matches current defaults exactly.
-4. **[audio/eval] Add optional PESQ/STOI-style perceptual metric to evaluation report** — behind an opt-in flag if a suitable pure-Python/TF implementation is available; otherwise document as a future dependency decision.
+1. **[audio/loss] Add a mel-scale/log-mel spectral loss option (#33)** — `--loss-mel-weight`, computed via `tf.signal.linear_to_mel_weight_matrix`.
+2. **[audio/loss] Add an A-weighting (or simplified perceptual weighting) term (#34)** — approximate psychoacoustic frequency sensitivity curve applied to the STFT magnitude loss.
+3. **[audio/loss] Introduce `--loss-profile {balanced,snr,perceptual}` presets (#35)** — mirrors the image trainer's `--loss-profile` convention; `balanced` matches current defaults exactly.
+4. **[audio/eval] Add optional PESQ/STOI-style perceptual metric to evaluation report (#36)** — behind an opt-in flag if a suitable pure-Python/TF implementation is available; otherwise document as a future dependency decision.
 
 ### Milestone A4 — Data Pipeline Robustness (Multi-channel, Rate, Noise)
 **Objective:** Remove the mono-only/fixed-sample-rate/no-augmentation assumptions.
@@ -76,10 +76,10 @@ Issues:
 **Exit criteria:** Trainer supports an opt-in stereo mode (or documents the mono-only constraint explicitly as intentional), resampling method is configurable, and a noise-robustness smoke check exists.
 
 Issues:
-1. **[audio/data] Make stereo→mono downmixing explicit and opt-in vs. add a `--channels {mono,stereo}` mode** — decide and document the intended scope; if stereo is out of scope, add a clear `NotImplementedError`/docstring instead of silent averaging.
-2. **[audio/data] Replace linear-interpolation resampling with a configurable method** — `--resample-method {linear,polyphase}`, default `linear` to preserve current behavior.
-3. **[audio/data] Add optional additive noise augmentation during training** — `--augment-noise-std`, default 0 (off).
-4. **[audio/data] Add a corrupted/noisy-input robustness smoke check** — feed a clipped/corrupted WAV through inference and assert graceful handling (no crash, bounded SNR drop) instead of silent fallback-to-silence.
+1. **[audio/data] Make stereo→mono downmixing explicit and opt-in vs. add a `--channels {mono,stereo}` mode (#37)** — decide and document the intended scope; if stereo is out of scope, add a clear `NotImplementedError`/docstring instead of silent averaging.
+2. **[audio/data] Replace linear-interpolation resampling with a configurable method (#38)** — `--resample-method {linear,polyphase}`, default `linear` to preserve current behavior.
+3. **[audio/data] Add optional additive noise augmentation during training (#39)** — `--augment-noise-std`, default 0 (off).
+4. **[audio/data] Add a corrupted/noisy-input robustness smoke check (#40)** — feed a clipped/corrupted WAV through inference and assert graceful handling (no crash, bounded SNR drop) instead of silent fallback-to-silence.
 
 ### Milestone A5 — Reporting, Search & Docs Alignment
 **Objective:** Keep `src/training/random_search_hyperparams.py`, `documentation/*.md`, and evaluation reports consistent with A1–A4 as they land.
@@ -87,10 +87,10 @@ Issues:
 **Exit criteria:** Random search can sweep any new axis (bit-depth, loss-profile, resample-method) behind explicit toggles; `documentation/MODEL_PARAMS_INPUT.md` and `README.md` enumerate every new flag.
 
 Issues:
-1. **[audio/search] Extend audio search space for new flags** — bit-depth, loss-profile, resample-method added to `src/training/random_search_hyperparams.py` and `documentation/random_search_profile.json`.
-2. **[audio/docs] Full CLI flag audit for the audio trainer** — cross-check `--help` output vs `documentation/MODEL_PARAMS_INPUT.md`.
-3. **[audio/reporting] Add a compression-ratio/SNR frontier plot** — extend `src/reporting/plot_training_metrics_from_report.py` / `src/reporting/generate_master_report.py`.
-4. **[audio/pipeline] Sync `src/pipeline/run_full_production_pipeline.py` with any renamed/added audio flags.**
+1. **[audio/search] Extend audio search space for new flags (#41)** — bit-depth, loss-profile, resample-method added to `src/training/random_search_hyperparams.py` and `documentation/random_search_profile.json`.
+2. **[audio/docs] Full CLI flag audit for the audio trainer (#42)** — cross-check `--help` output vs `documentation/MODEL_PARAMS_INPUT.md`.
+3. **[audio/reporting] Add a compression-ratio/SNR frontier plot (#43)** — extend `src/reporting/plot_training_metrics_from_report.py` / `src/reporting/generate_master_report.py`.
+4. **[audio/pipeline] Sync `src/pipeline/run_full_production_pipeline.py` with any renamed/added audio flags (#44).**
 
 ## 5. Suggested sequencing
 
@@ -102,4 +102,3 @@ A1 (real accounting) should land before A3 (perceptual loss) so quality tradeoff
 - Cloud/multi-GPU training support.
 - Changing existing preset defaults without an explicit, separately-reviewed PR.
 - Making the vortex visualization demo itself more sophisticated (it's out of scope for the *compression* roadmap).
-

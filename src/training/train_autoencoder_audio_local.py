@@ -2,7 +2,8 @@
 """
 Upgraded MacBook-friendly audio autoencoder trainer with SNR fixes,
 learned Conv1DTranspose upsampling, linear bottleneck representation,
-and memory-safe TFLite export bypassing macOS MLIR compiler crashes.
+straight-through estimator (STE) latent quantization, real compression
+accounting, and memory-safe TFLite export bypassing macOS MLIR compiler crashes.
 """
 
 import argparse
@@ -42,6 +43,120 @@ except ImportError:
             json.dump({"title": title, "data": payload}, f, indent=4)
 
 
+@tf.keras.utils.register_keras_serializable(package="ai_compressor_audio")
+class StraightThroughQuantize(layers.Layer):
+    """Round in forward pass while preserving gradients via Straight-Through Estimator (STE).
+
+    `bit_depth` controls how many discrete levels the latent vector is quantized to
+    (2**bit_depth levels). When disabled (bit_depth <= 0 or None), acts as a no-op identity.
+    When `quant_noise_anneal` is enabled, additive uniform noise scaled to one quantization
+    step is mixed in during training only, and faded from full strength to zero via `noise_scale`
+    (updated externally by `QuantNoiseAnnealCallback`) so the model gradually adapts to hard
+    quantization.
+    """
+
+    def __init__(self, bit_depth: int | None = None, quant_noise_anneal: bool = False, **kwargs):
+        super().__init__(**kwargs)
+        self.bit_depth = int(bit_depth) if bit_depth is not None and int(bit_depth) > 0 else None
+        self.quant_noise_anneal = bool(quant_noise_anneal)
+        self.levels = float((1 << self.bit_depth) - 1) if self.bit_depth else None
+        self.noise_scale = None
+        if self.bit_depth and self.quant_noise_anneal:
+            self.noise_scale = self.add_weight(
+                name="quant_noise_scale",
+                shape=(),
+                dtype=tf.float32,
+                initializer=tf.keras.initializers.Constant(1.0),
+                trainable=False,
+            )
+
+    def call(self, inputs, training=None):
+        if not self.bit_depth or self.levels is None:
+            return inputs
+
+        # Audio bottleneck is linear; clamp to dynamic range [-1.0, 1.0] and map to [0, 1]
+        clamped = tf.clip_by_value(inputs, -1.0, 1.0)
+        norm = (clamped + 1.0) * 0.5
+        quantized_norm = tf.round(norm * self.levels) / self.levels
+        quantized = quantized_norm * 2.0 - 1.0
+        ste = inputs + tf.stop_gradient(quantized - inputs)
+
+        if not self.quant_noise_anneal or not training or self.noise_scale is None:
+            return ste
+
+        step = 2.0 / self.levels
+        noise = tf.random.uniform(tf.shape(inputs), -0.5, 0.5, dtype=inputs.dtype) * step * self.noise_scale
+        return ste + noise
+
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            "bit_depth": self.bit_depth,
+            "quant_noise_anneal": self.quant_noise_anneal,
+        })
+        return config
+
+
+class QuantNoiseAnnealCallback(callbacks.Callback):
+    """Linearly fades a StraightThroughQuantize layer's noise_scale from 1 -> 0."""
+
+    def __init__(self, layer, total_epochs):
+        super().__init__()
+        self.layer = layer
+        self.total_epochs = max(1, int(total_epochs))
+
+    def on_epoch_begin(self, epoch, logs=None):
+        if getattr(self.layer, "noise_scale", None) is None:
+            return
+        frac = max(0.0, 1.0 - (epoch / self.total_epochs))
+        self.layer.noise_scale.assign(frac)
+
+
+class _StaticRangeEncoder:
+    """Minimal order-0 static-frequency range coder (32-bit, byte-oriented)."""
+
+    TOP = 1 << 24
+    BOTTOM = 1 << 16
+
+    def __init__(self, freqs):
+        total = int(sum(freqs))
+        self.total = total
+        cum = 0
+        self.cum_freqs = []
+        self.freqs = []
+        for f in freqs:
+            self.cum_freqs.append(cum)
+            self.freqs.append(int(f))
+            cum += int(f)
+
+    def encode(self, symbols):
+        low = 0
+        rng = 0xFFFFFFFF
+        out = bytearray()
+        for sym in symbols:
+            f = self.freqs[sym]
+            if f == 0:
+                continue
+            cf = self.cum_freqs[sym]
+            rng //= self.total
+            low = (low + cf * rng) & 0xFFFFFFFF
+            rng *= f
+            while True:
+                if (low ^ (low + rng)) < self.TOP:
+                    pass
+                elif rng < self.BOTTOM:
+                    rng = (-low) & (self.BOTTOM - 1)
+                else:
+                    break
+                out.append((low >> 24) & 0xFF)
+                low = (low << 8) & 0xFFFFFFFF
+                rng = (rng << 8) & 0xFFFFFFFF
+        for _ in range(4):
+            out.append((low >> 24) & 0xFF)
+            low = (low << 8) & 0xFFFFFFFF
+        return bytes(out)
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Train an audio autoencoder locally.")
     parser.add_argument("--output-root", type=str, default="models/audio_local_run",
@@ -57,7 +172,18 @@ def parse_args():
     parser.add_argument("--model-kernel-size", type=int, default=5, help="Kernel size for core Conv1D blocks")
     parser.add_argument("--latent-l1", type=float, default=0.0, help="Optional L1 activity penalty on bottleneck")
     parser.add_argument("--latent-l2", type=float, default=0.0, help="Optional L2 activity penalty on bottleneck")
-    parser.add_argument("--latent-bits", type=int, default=16, help="Assumed quantized bits per latent dimension")
+    parser.add_argument("--latent-bits", type=int, default=16, help="Assumed quantized bits per latent dimension for theoretical ratio")
+    parser.add_argument(
+        "--latent-bit-depth",
+        type=int,
+        default=0,
+        help="Bit depth for actual latent quantization (e.g. 8). Default 0 (disabled/float32).",
+    )
+    parser.add_argument(
+        "--quant-noise-anneal",
+        action="store_true",
+        help="Linearly anneal additive quantization noise during training when --latent-bit-depth > 0",
+    )
     parser.add_argument("--batch-size", type=int, default=16, help="Batch size")
     parser.add_argument("--epochs", type=int, default=24, help="Epoch count")
     parser.add_argument("--lr", type=float, default=1.2e-4, help="Learning rate")
@@ -102,6 +228,7 @@ def apply_preset(args):
     args.target_snr_db = float(args.target_snr_db)
     args.loss_hard_weight = max(0.0, float(args.loss_hard_weight))
     args.loss_stft_power = max(1.0, float(args.loss_stft_power))
+    args.latent_bit_depth = max(0, int(args.latent_bit_depth))
     return args
 
 
@@ -334,6 +461,8 @@ def build_audio_autoencoder(
         latent_dim,
         latent_l1=0.0,
         latent_l2=0.0,
+        latent_bit_depth=0,
+        quant_noise_anneal=False,
         model_base_filters=48,
         model_kernel_size=5,
 ):
@@ -347,6 +476,7 @@ def build_audio_autoencoder(
        with learned, fractional-strided Transposed Convolutions (Conv1DTranspose).
     4. Removes encoder-to-decoder skip connections so the Decoder evaluates strictly
        and independently from the Compressed Latent Bottleneck during inference!
+    5. Inserts opt-in Straight-Through Estimator (STE) bit-depth quantization (Milestone A1).
     """
     inputs = layers.Input(shape=(clip_len, 1))
     base_filters = max(16, int(model_base_filters))
@@ -381,8 +511,15 @@ def build_audio_autoencoder(
     # LINEAR BOTTLENECK: Crucial for phase and continuous audio transitions (-inf, +inf)
     latent = layers.Dense(latent_dim, activation="linear", name="bottleneck", activity_regularizer=bottleneck_reg)(x)
 
+    # STRAIGHT-THROUGH ESTIMATOR (STE) QUANTIZATION (Milestone A1)
+    latent_quant = StraightThroughQuantize(
+        bit_depth=latent_bit_depth,
+        quant_noise_anneal=quant_noise_anneal,
+        name="bottleneck_quant",
+    )(latent)
+
     # Decode Latent Code (No Skip connections bypassing the bottleneck)
-    x_dec = layers.Dense(down * base_filters * 4, activation="relu")(latent)
+    x_dec = layers.Dense(down * base_filters * 4, activation="relu")(latent_quant)
     x_dec = layers.Reshape((down, base_filters * 4))(x_dec)
 
     # Decoder Stage 4: Transposed learned upsampling smooths interpolation (1000 -> 2000)
@@ -536,14 +673,102 @@ def run_mp3_benchmark(model, test_data, run_dir, sample_rate):
     return report_path
 
 
-def estimate_audio_compression_ratio(clip_len, latent_dim, latent_bits):
+def compute_audio_compression_accounting(model, test_data, clip_len, latent_dim, latent_bits, latent_bit_depth=0):
+    """Computes both theoretical and actual compression metrics side by side (Milestone A1)."""
+    input_pcm_bytes_per_clip = int(clip_len) * 2  # 16-bit PCM (2 bytes per sample)
     input_bits = int(clip_len) * 16
     latent_bits_total = max(1, int(latent_dim) * int(max(1, latent_bits)))
-    return {
+    estimated_ratio = float(input_bits / latent_bits_total)
+
+    result = {
         "input_bits_per_clip": int(input_bits),
+        "input_pcm_bytes_per_clip": int(input_pcm_bytes_per_clip),
+        "theoretical": {
+            "assumed_latent_bits": int(latent_bits),
+            "latent_bits_per_clip": int(latent_bits_total),
+            "estimated_latent_bytes_per_clip": float(latent_bits_total / 8.0),
+            "estimated_input_to_latent_ratio": float(estimated_ratio),
+        },
         "latent_bits_per_clip": int(latent_bits_total),
-        "estimated_input_to_latent_ratio": float(input_bits / latent_bits_total),
+        "estimated_input_to_latent_ratio": float(estimated_ratio),
     }
+
+    # Extract bottleneck latent representation for a sample of test clips
+    bottleneck_layer = model.get_layer("bottleneck")
+    encoder_model = Model(inputs=model.input, outputs=bottleneck_layer.output)
+
+    latent_samples = []
+    for x, _ in test_data.take(4):
+        preds = encoder_model.predict(x, verbose=0)
+        latent_samples.append(preds)
+        if sum(s.shape[0] for s in latent_samples) >= 32:
+            break
+
+    if not latent_samples:
+        raw_bytes_per_clip = float(latent_dim * 4)
+        result["actual"] = {
+            "quantized": False,
+            "latent_bit_depth": None,
+            "actual_latent_bytes_per_clip": raw_bytes_per_clip,
+            "actual_compression_ratio": float(input_pcm_bytes_per_clip / raw_bytes_per_clip),
+            "entropy_estimate_bytes_per_clip": raw_bytes_per_clip,
+        }
+        result["actual_latent_bytes_per_clip"] = raw_bytes_per_clip
+        result["actual_compression_ratio"] = float(input_pcm_bytes_per_clip / raw_bytes_per_clip)
+        return result
+
+    latents = np.concatenate(latent_samples, axis=0)
+    n_clips = latents.shape[0]
+
+    if latent_bit_depth and int(latent_bit_depth) > 0:
+        bd = int(latent_bit_depth)
+        num_levels = 1 << bd
+        max_level = num_levels - 1
+        clamped = np.clip(latents, -1.0, 1.0)
+        norm = (clamped + 1.0) * 0.5
+        discrete = np.clip(np.round(norm * max_level), 0, max_level).astype(np.int64)
+
+        # Compute empirical entropy
+        flat = discrete.reshape(-1)
+        counts = np.bincount(flat, minlength=num_levels)
+        nonzero = counts[counts > 0]
+        probs = nonzero / nonzero.sum()
+        entropy_bits_per_dim = float(-np.sum(probs * np.log2(probs)))
+        entropy_bytes_per_clip = float((entropy_bits_per_dim * latent_dim) / 8.0)
+
+        # Range encode discrete symbols
+        freqs = np.maximum(counts, 1)
+        encoder = _StaticRangeEncoder(freqs)
+        encoded_bytes = len(encoder.encode(flat.tolist()))
+        actual_bytes_per_clip = float(encoded_bytes / n_clips)
+        actual_ratio = float(input_pcm_bytes_per_clip / max(1e-6, actual_bytes_per_clip))
+
+        result["actual"] = {
+            "quantized": True,
+            "latent_bit_depth": bd,
+            "entropy_bits_per_dim": entropy_bits_per_dim,
+            "entropy_estimate_bytes_per_clip": entropy_bytes_per_clip,
+            "actual_latent_bytes_per_clip": actual_bytes_per_clip,
+            "actual_compression_ratio": actual_ratio,
+            "sample_count": int(n_clips),
+        }
+        result["actual_latent_bytes_per_clip"] = actual_bytes_per_clip
+        result["actual_compression_ratio"] = actual_ratio
+    else:
+        raw_bytes_per_clip = float(latent_dim * 4)  # float32 = 4 bytes per dim
+        actual_ratio = float(input_pcm_bytes_per_clip / raw_bytes_per_clip)
+        result["actual"] = {
+            "quantized": False,
+            "latent_bit_depth": None,
+            "actual_latent_bytes_per_clip": raw_bytes_per_clip,
+            "actual_compression_ratio": actual_ratio,
+            "entropy_estimate_bytes_per_clip": raw_bytes_per_clip,
+            "sample_count": int(n_clips),
+        }
+        result["actual_latent_bytes_per_clip"] = raw_bytes_per_clip
+        result["actual_compression_ratio"] = actual_ratio
+
+    return result
 
 
 def plot_history(history, plot_path):
@@ -589,6 +814,9 @@ def save_report(args, history, eval_values, run_dir, preview_plot, preview_wav, 
         "metrics_plot": metrics_plot,
         "benchmark": benchmark_path,
         "compression_estimate": compression_estimate,
+        "actual_latent_bytes_per_clip": compression_estimate.get("actual_latent_bytes_per_clip"),
+        "actual_compression_ratio": compression_estimate.get("actual_compression_ratio"),
+        "estimated_input_to_latent_ratio": compression_estimate.get("estimated_input_to_latent_ratio"),
     }
     report_path = os.path.join(run_dir, "audio_evaluation_report.md")
     write_markdown_json_report(payload, report_path, title="Audio Evaluation Report")
@@ -614,6 +842,7 @@ def main():
     args.loss_hard_weight = max(0.0, float(args.loss_hard_weight))
     args.loss_stft_power = max(1.0, float(args.loss_stft_power))
     args.target_snr_db = float(args.target_snr_db)
+    args.latent_bit_depth = max(0, int(args.latent_bit_depth))
     configure_runtime(args.seed)
 
     clip_len = int(args.sample_rate * args.clip_seconds)
@@ -635,6 +864,8 @@ def main():
         args.latent_dim,
         latent_l1=args.latent_l1,
         latent_l2=args.latent_l2,
+        latent_bit_depth=args.latent_bit_depth,
+        quant_noise_anneal=args.quant_noise_anneal,
         model_base_filters=args.model_base_filters,
         model_kernel_size=args.model_kernel_size,
     )
@@ -659,6 +890,10 @@ def main():
     ]
     if not args.disable_target_snr_stop:
         cbs.append(TargetSNRCallback(args.target_snr_db))
+
+    if args.latent_bit_depth > 0 and args.quant_noise_anneal:
+        quant_layer = model.get_layer("bottleneck_quant")
+        cbs.append(QuantNoiseAnnealCallback(quant_layer, args.epochs))
 
     history = model.fit(
         train_data,
@@ -689,7 +924,14 @@ def main():
         except Exception as exc:
             print(f"[!] TFLite export skipped: {exc}")
 
-    compression_estimate = estimate_audio_compression_ratio(clip_len, args.latent_dim, args.latent_bits)
+    compression_estimate = compute_audio_compression_accounting(
+        model,
+        test_data,
+        clip_len,
+        args.latent_dim,
+        args.latent_bits,
+        latent_bit_depth=args.latent_bit_depth,
+    )
     report_path = save_report(args, history, eval_values, run_dir, preview_plot, preview_wav, benchmark_path,
                               metrics_plot, compression_estimate)
 
@@ -708,7 +950,12 @@ def main():
     )
     print(f"[+] Hard residual weight: {args.loss_hard_weight:.3f}")
     print(f"[+] STFT penalty power: {args.loss_stft_power:.3f}")
-    print(f"[+] Estimated input/latent ratio: {compression_estimate['estimated_input_to_latent_ratio']:.2f}x")
+    print(f"[+] Theoretical input/latent ratio: {compression_estimate['estimated_input_to_latent_ratio']:.2f}x ({compression_estimate['theoretical']['latent_bits_per_clip']} bits/clip @ {args.latent_bits}b/dim)")
+    if compression_estimate.get("actual", {}).get("quantized"):
+        print(f"[+] Actual quantized latent ({args.latent_bit_depth}-bit): {compression_estimate['actual_latent_bytes_per_clip']:.1f} bytes/clip ({compression_estimate['actual_compression_ratio']:.2f}x ratio)")
+        print(f"[+] Actual entropy estimate: {compression_estimate['actual']['entropy_estimate_bytes_per_clip']:.1f} bytes/clip ({compression_estimate['actual']['entropy_bits_per_dim']:.2f} bits/dim)")
+    else:
+        print(f"[+] Actual latent (float32 unquantized): {compression_estimate['actual_latent_bytes_per_clip']:.0f} bytes/clip ({compression_estimate['actual_compression_ratio']:.2f}x ratio)")
     if float(eval_values.get("snr_db_metric", float("-inf"))) < args.target_snr_db:
         print(f"[!] SNR target not reached yet (target={args.target_snr_db:.1f} dB).")
     if tflite_path:
