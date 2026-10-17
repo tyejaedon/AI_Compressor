@@ -85,6 +85,10 @@ def collect_major_runs() -> list[dict[str, Any]]:
                 "psnr_metric": tm.get("psnr_metric"),
                 "ssim_metric": tm.get("ssim_metric"),
                 "snr_db_metric": tm.get("snr_db_metric"),
+                "actual_compression_ratio": data.get("actual_compression_ratio"),
+                "estimated_input_to_latent_ratio": data.get("estimated_input_to_latent_ratio"),
+                "latent_bit_depth": data.get("config", {}).get("latent_bit_depth"),
+                "loss_profile": data.get("config", {}).get("loss_profile", "balanced"),
             }
         )
     return rows
@@ -174,7 +178,63 @@ def benchmark_lossy_images() -> list[dict[str, Any]]:
     return out
 
 
-def write_markdown(rows: list[dict[str, Any]], lossy: list[dict[str, Any]], out_path: Path) -> None:
+def plot_audio_frontier(models_dir: Path, out_path: Path) -> list[dict[str, Any]]:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    audio_runs = []
+    for report_file in models_dir.rglob("audio_evaluation_report.md"):
+        data = read_json(report_file)
+        if not data or not isinstance(data, dict):
+            continue
+        tm = data.get("test_metrics", {})
+        snr = tm.get("snr_db_metric")
+        psnr = tm.get("psnr_metric")
+        act_ratio = data.get("actual_compression_ratio")
+        est_ratio = data.get("estimated_input_to_latent_ratio")
+        cfg = data.get("config", {})
+        bit_depth = cfg.get("latent_bit_depth", 0)
+        profile = cfg.get("loss_profile", "balanced")
+        rel_path = str(report_file.parent.relative_to(models_dir))
+
+        ratio = act_ratio if act_ratio is not None else est_ratio
+        if ratio is not None and (snr is not None or psnr is not None):
+            audio_runs.append({
+                "run": rel_path,
+                "ratio": float(ratio),
+                "actual_ratio": act_ratio,
+                "estimated_ratio": est_ratio,
+                "snr": float(snr) if snr is not None else None,
+                "psnr": float(psnr) if psnr is not None else None,
+                "bit_depth": bit_depth,
+                "loss_profile": profile,
+            })
+
+    if not audio_runs:
+        return []
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    for r in audio_runs:
+        y_val = r["snr"] if r["snr"] is not None else r["psnr"]
+        lbl = f"{r['run'][:22]} ({r['bit_depth']}b)"
+        ax.scatter(r["ratio"], y_val, s=100, alpha=0.8, zorder=3)
+        ax.annotate(lbl, (r["ratio"], y_val), textcoords="offset points", xytext=(6, 4), fontsize=8)
+
+    ax.set_title("Audio Compression Ratio vs SNR Frontier", fontsize=12)
+    ax.set_xlabel("Compression Ratio (higher is better)", fontsize=10)
+    ax.set_ylabel("SNR dB / PSNR (higher is better)", fontsize=10)
+    if any(r["ratio"] > 100 for r in audio_runs):
+        ax.set_xscale("log")
+    ax.grid(True, which="both", alpha=0.3)
+    fig.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=140)
+    plt.close(fig)
+    return audio_runs
+
+
+def write_markdown(rows: list[dict[str, Any]], lossy: list[dict[str, Any]], audio_frontier: list[dict[str, Any]], out_path: Path) -> None:
     now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
     lines: list[str] = []
@@ -236,6 +296,22 @@ def write_markdown(rows: list[dict[str, Any]], lossy: list[dict[str, Any]], out_
         )
 
     lines.append("")
+    if audio_frontier:
+        lines.append("")
+        lines.append("## Audio Compression-Ratio vs SNR Frontier (Milestone A5)")
+        lines.append("")
+        lines.append("![Audio Frontier](audio_compression_snr_frontier.png)")
+        lines.append("")
+        lines.append("| Run | Bit Depth | Loss Profile | Actual Ratio | Est Ratio | SNR (dB) | PSNR |")
+        lines.append("|---|---:|---|---:|---:|---:|---:|")
+        for af in audio_frontier:
+            snr_s = f"{af['snr']:.2f}" if af.get("snr") is not None else "-"
+            psnr_s = f"{af['psnr']:.2f}" if af.get("psnr") is not None else "-"
+            act_s = f"{af['actual_ratio']:.2f}x" if af.get("actual_ratio") is not None else "-"
+            est_s = f"{af['estimated_ratio']:.2f}x" if af.get("estimated_ratio") is not None else "-"
+            lines.append(f"| `{af['run']}` | {af.get('bit_depth', 0)}b | `{af.get('loss_profile', 'balanced')}` | {act_s} | {est_s} | {snr_s} | {psnr_s} |")
+
+    lines.append("")
     lines.append("## Notes")
     lines.append("")
     lines.append("- JPEG/WebP baselines are classic lossy codecs on full-resolution images.")
@@ -252,7 +328,10 @@ def main() -> None:
     out_dir = MODELS_DIR / "reports"
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / "MASTER_RUN_REPORT.md"
-    write_markdown(rows, lossy, out_path)
+    frontier_plot_path = out_dir / "audio_compression_snr_frontier.png"
+    audio_frontier = plot_audio_frontier(MODELS_DIR, frontier_plot_path)
+
+    write_markdown(rows, lossy, audio_frontier, out_path)
 
     print(str(out_path))
 

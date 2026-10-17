@@ -236,6 +236,12 @@ def sample_params(
         return {
             "preset": "custom",
             "latent_dim": rng.choice([160, 224, 320, 384, 512]),
+            "latent_bit_depth": rng.choice([0, 4, 6, 8]),
+            "loss_profile": rng.choice(["balanced", "snr", "perceptual"]),
+            "resample_method": rng.choice(["linear", "polyphase"]),
+            "channels": "mono",
+            "stereo_downmix": "average",
+            "augment_noise_std": rng.choice([0.0, 0.01, 0.02]),
             "model_base_filters": rng.choice([32, 40, 48, 56]),
             "model_kernel_size": rng.choice([3, 5, 7]),
             "batch_size": rng.choice([8, 12, 16]),
@@ -665,7 +671,7 @@ def main() -> None:
 
     key_candidates = {
         "image": ["block_size", "latent_dim", "model_base_filters", "model_kernel_size", "batch_size", "epochs", "lr"],
-        "audio": ["latent_dim", "model_base_filters", "model_kernel_size", "batch_size", "epochs", "lr", "clip_seconds"],
+        "audio": ["latent_dim", "latent_bit_depth", "loss_profile", "resample_method", "model_base_filters", "model_kernel_size", "batch_size", "epochs", "lr", "clip_seconds"],
         "video": ["latent_dim", "model_base_filters", "model_kernel_size", "batch_size", "epochs", "lr", "frames", "height", "width"],
     }
     if args.modality == "image" and args.image_trainer == "lossy":

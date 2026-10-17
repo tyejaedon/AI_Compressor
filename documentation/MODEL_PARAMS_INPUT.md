@@ -122,6 +122,71 @@ New `audio` flags (all default to preserving prior behavior):
 | `--resample-method {linear,polyphase}` | `linear` | Sample rate conversion algorithm: `linear` or `polyphase` (Kaiser sinc). |
 | `--augment-noise-std <float>` | `0.0` (off) | Standard deviation of additive Gaussian noise during training. |
 
+## Audio trainer: full CLI flag reference (Milestone A5)
+
+Below is the complete reference of all command-line arguments supported by `src/training/train_autoencoder_audio_local.py`:
+
+### Model architecture & signal representation
+| Flag | Default | Description |
+|---|---|---|
+| `--preset {custom,m1-air-fast,m1-air-balanced,m1-air-quality}` | `m1-air-fast` | High-level hardware/quality configuration preset. |
+| `--sample-rate <int>` | `22050` | Audio sampling frequency in Hz. |
+| `--clip-seconds <float>` | `0.5` | Clip duration in seconds per training window. |
+| `--latent-dim <int>` | `1024` | Bottleneck dimension size. |
+| `--model-base-filters <int>` | `64` | Conv1D base filter channel depth. |
+| `--model-kernel-size <int>` | `5` | Conv1D convolutional kernel size. |
+| `--channels {mono,stereo}` | `mono` | Model channel architecture: `mono` (1 channel) or `stereo` (2 channels). |
+| `--stereo-downmix {average,left,right,error}` | `average` | Multi-channel downmixing rule when loading audio in mono mode. |
+| `--resample-method {linear,polyphase}` | `linear` | Sample-rate interpolation algorithm (`linear` or `polyphase` sinc). |
+
+### Quantization & bitrate accounting
+| Flag | Default | Description |
+|---|---|---|
+| `--latent-bit-depth <int>` | `0` (float32) | Discrete quantization bit-depth for bottleneck latents (0 = disabled). |
+| `--quant-noise-anneal` | off | Linearly fade additive quantization noise to zero during training epochs. |
+| `--latent-bits <int>` | `8` | Assumed bit allocation for backward-compatible theoretical ratio accounting. |
+
+### Loss functions & perceptual objectives
+| Flag | Default | Description |
+|---|---|---|
+| `--loss-profile {balanced,snr,perceptual}` | `balanced` | Loss profile preset configuring default weights across objectives. |
+| `--loss-mse-weight <float>` | `0.55` | Time-domain mean squared error loss weight. |
+| `--loss-l1-weight <float>` | `0.10` | Time-domain mean absolute error loss weight. |
+| `--loss-stft-weight <float>` | `0.35` | STFT magnitude spectral loss weight. |
+| `--loss-mel-weight <float>` | `0.0` | Psychoacoustic log-mel spectral envelope loss weight. |
+| `--loss-a-weight <float>` | `0.0` | Psychoacoustic A-weighted STFT spectral loss weight. |
+| `--mel-bins <int>` | `64` | Number of mel filterbank bins used when mel loss is active. |
+| `--loss-hard-weight <float>` | `1.5` | Upweight multiplier for worst reconstruction errors. |
+| `--loss-stft-power <float>` | `1.2` | Exponent applied to STFT magnitude error term. |
+
+### Training, optimization & regularization
+| Flag | Default | Description |
+|---|---|---|
+| `--batch-size <int>` | `16` | Batch size per training step. |
+| `--epochs <int>` | `20` | Maximum number of training epochs. |
+| `--lr <float>` | `0.0001` | Adam learning rate. |
+| `--seed <int>` | `42` | Random seed for data shuffling and weight initialization. |
+| `--latent-l1 <float>` | `0.0` | L1 sparsity regularization penalty on latent vectors. |
+| `--latent-l2 <float>` | `0.0` | L2 weight decay penalty on latent vectors. |
+| `--target-snr-db <float>` | `90.0` | Validation SNR (dB) threshold for early stopping. |
+| `--disable-target-snr-stop` | off | Run all epochs without early stopping on target SNR. |
+| `--augment-noise-std <float>` | `0.0` | Standard deviation of additive Gaussian noise during training. |
+| `--shuffle-buffer <int>` | `256` | Buffer size for training dataset shuffling. |
+
+### Dataset, evaluation & export
+| Flag | Default | Description |
+|---|---|---|
+| `--data-dir <path>` | required | Root directory containing audio files. |
+| `--real-val-ratio <float>` | `0.15` | Fraction of real files for validation. |
+| `--real-test-ratio <float>` | `0.15` | Fraction of real files for test evaluation. |
+| `--real-file-limit <int>` | `0` (all) | Maximum number of audio files to process. |
+| `--eval-perceptual-metrics` | off | Compute perceptual metrics (LSD in dB, A-LSD, STOI envelope proxy). |
+| `--run-mp3-benchmark` | off | Benchmark reconstruction size against MP3 CBR bitrates. |
+| `--output-root <path>` | `models/audio_local_run` | Base output directory for training runs and evaluation reports. |
+| `--params-file <path>` | none | JSON configuration file specifying hyperparameter overrides. |
+| `--export-tflite` / `--no-export-tflite` | `--export-tflite` | Enable or disable exporting TFLite flatbuffers. |
+| `--tflite-fp16` | off | Enable float16 quantization during TFLite export. |
+
 ## Learned image upscaler (Milestone 3)
 
 `train_upscaler_image_local.py` trains a small residual CNN + sub-pixel (depth-to-space) upsampler on the

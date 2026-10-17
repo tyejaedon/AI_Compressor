@@ -16,7 +16,7 @@ in `src/training/random_search_hyperparams.py` / `src/training/param_overrides.p
 | Loss/metrics | Weighted MSE + L1 + STFT-magnitude loss with a "hard residual" upweighting term; tracks SNR (dB, primary) and PSNR. `TargetSNRCallback` stops early at `--target-snr-db` (default 90). **(Milestone A3 Complete)**: Configurable `--loss-profile {balanced,snr,perceptual}`, log-mel spectral loss via `tf.signal.linear_to_mel_weight_matrix`, psychoacoustic A-weighting spectral loss, and zero-dependency perceptual evaluation metrics (LSD in dB, A-LSD, and STOI envelope proxy). |
 | Real-time path | `src/audio/realtime_audio_compression_pipeline.py` provides a chunked Overlap-Add (OLA) streaming compression runtime using the trained autoencoder. `src/audio/realtime_audio_vortex_pipeline.py` is a **feature-extraction-only** pipeline (FFT band energies → visual "vortex" control signals for a demo) and does not run the autoencoder. |
 | Robustness | **(Milestone A4 Complete)**: Configurable channel modes (`--channels {mono,stereo}`), explicit downmix strategies (`--stereo-downmix`), high-fidelity Kaiser-windowed polyphase sinc resampling (`--resample-method polyphase`), additive noise augmentation (`--augment-noise-std`), and structured corrupted-input recovery instead of silent fallback. |
-| Search & docs | `src/training/random_search_hyperparams.py` samples latent_dim/latent_bit_depth/filters/kernel/batch/epochs/lr/clip_seconds for audio; ranks by `snr_db_metric`. `--params-file` JSON `audio` section documented in `documentation/MODEL_PARAMS_INPUT.md`. |
+| Search & docs | **(Milestone A5 Complete)**: `src/training/random_search_hyperparams.py` samples latent_dim, latent_bit_depth, loss_profile, resample_method, channels, stereo_downmix, augment_noise_std; master report plots audio compression ratio vs SNR frontier; full CLI flag reference audited in `documentation/MODEL_PARAMS_INPUT.md`. |
 
 ## 2. Constraints (do not violate)
 
@@ -33,7 +33,7 @@ in `src/training/random_search_hyperparams.py` / `src/training/param_overrides.p
 - **G3 — Real-time compression inference**: extend (or add alongside) the vortex pipeline a streaming path that actually runs the trained autoencoder in chunks. [Landed in A2]
 - **G4 — Perceptual quality**: move beyond waveform/STFT-magnitude loss toward psychoacoustically-informed objectives. [Landed in A3]
 - **G5 — Robustness & multi-channel/rate support**: stereo, variable sample rate, noisy real-world input. [Landed in A4]
-- **G6 — Discoverability**: docs, search space, and reports stay in sync as the above land.
+- **G6 — Discoverability**: docs, search space, and reports stay in sync as the above land. [Landed in A5]
 
 ## 4. Milestones
 
@@ -81,16 +81,16 @@ Issues:
 3. **[audio/data] Add optional additive noise augmentation during training (#39)** — `--augment-noise-std`, default 0 (off). *(Completed)*
 4. **[audio/data] Add a corrupted/noisy-input robustness smoke check (#40)** — feed a clipped/corrupted WAV through inference and assert graceful handling (no crash, bounded SNR drop) instead of silent fallback-to-silence. *(Completed)*
 
-### Milestone A5 — Reporting, Search & Docs Alignment
+### Milestone A5 — Reporting, Search & Docs Alignment (Completed)
 **Objective:** Keep `src/training/random_search_hyperparams.py`, `documentation/*.md`, and evaluation reports consistent with A1–A4 as they land.
 **Why:** Every milestone above adds flags/metrics; without this milestone docs and search spaces drift (a known repo risk per `AGENT.md`).
-**Exit criteria:** Random search can sweep any new axis (bit-depth, loss-profile, resample-method) behind explicit toggles; `documentation/MODEL_PARAMS_INPUT.md` and `README.md` enumerate every new flag.
+**Exit criteria:** Random search can sweep any new axis (bit-depth, loss-profile, resample-method) behind explicit toggles; `documentation/MODEL_PARAMS_INPUT.md` and `README.md` enumerate every new flag. *(Achieved)*
 
 Issues:
-1. **[audio/search] Extend audio search space for new flags (#41)** — bit-depth, loss-profile, resample-method added to `src/training/random_search_hyperparams.py` and `documentation/random_search_profile.json`.
-2. **[audio/docs] Full CLI flag audit for the audio trainer (#42)** — cross-check `--help` output vs `documentation/MODEL_PARAMS_INPUT.md`.
-3. **[audio/reporting] Add a compression-ratio/SNR frontier plot (#43)** — extend `src/reporting/plot_training_metrics_from_report.py` / `src/reporting/generate_master_report.py`.
-4. **[audio/pipeline] Sync `src/pipeline/run_full_production_pipeline.py` with any renamed/added audio flags (#44).**
+1. **[audio/search] Extend audio search space for new flags (#41)** — bit-depth, loss-profile, resample-method, channels, stereo-downmix, augment-noise-std added to `src/training/random_search_hyperparams.py` and `documentation/random_search_profile.json`. *(Completed)*
+2. **[audio/docs] Full CLI flag audit for the audio trainer (#42)** — cross-check `--help` output vs `documentation/MODEL_PARAMS_INPUT.md`. *(Completed)*
+3. **[audio/reporting] Add a compression-ratio/SNR frontier plot (#43)** — extend `src/reporting/plot_training_metrics_from_report.py` / `src/reporting/generate_master_report.py`. *(Completed)*
+4. **[audio/pipeline] Sync `src/pipeline/run_full_production_pipeline.py` with any renamed/added audio flags (#44).** *(Completed)*
 
 ## 5. Suggested sequencing
 
