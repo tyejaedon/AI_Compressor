@@ -85,7 +85,27 @@ def main():
             f"entropy={actual_info['entropy_bits_per_dim']:.2f} bits/dim"
         )
 
-    print("[+] All audio smoke tests passed successfully (Baseline & Milestone A1 Quantization)")
+        # 3. Milestone A3 perceptual loss run (perceptual profile + psychoacoustic evaluation)
+        print("[*] Running audio smoke test (Milestone A3 perceptual profile + evaluation)...")
+        perceptual_dir = tmp_path / "perceptual"
+        perceptual_report = run_audio_smoke(["--loss-profile", "perceptual", "--eval-perceptual-metrics"], perceptual_dir)
+
+        assert perceptual_report["config"]["loss_profile"] == "perceptual", "Expected loss_profile=perceptual"
+        assert perceptual_report["config"]["loss_mel_weight"] > 0, "Expected positive loss_mel_weight in perceptual profile"
+        assert perceptual_report["config"]["loss_a_weight"] > 0, "Expected positive loss_a_weight in perceptual profile"
+        assert "perceptual_metrics" in perceptual_report, "Missing perceptual_metrics in evaluation report"
+        p_metrics = perceptual_report["perceptual_metrics"]
+        assert "lsd_db" in p_metrics and p_metrics["lsd_db"] >= 0, "Invalid LSD metric"
+        assert "a_weighted_lsd_db" in p_metrics and p_metrics["a_weighted_lsd_db"] >= 0, "Invalid A-LSD metric"
+        assert "envelope_correlation_stoi_proxy" in p_metrics and 0.0 <= p_metrics["envelope_correlation_stoi_proxy"] <= 1.0, "Invalid STOI proxy metric"
+        assert p_metrics["sample_count"] > 0, "Zero samples evaluated for perceptual metrics"
+        print(
+            f"[+] Perceptual passed: LSD={p_metrics['lsd_db']:.2f} dB, "
+            f"A-LSD={p_metrics['a_weighted_lsd_db']:.2f} dB, "
+            f"STOI proxy={p_metrics['envelope_correlation_stoi_proxy']:.3f}"
+        )
+
+    print("[+] All audio smoke tests passed successfully (Baseline, A1 Quantization, & A3 Perceptual Loss)")
 
 
 if __name__ == "__main__":
