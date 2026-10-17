@@ -46,6 +46,10 @@ def parse_args():
     parser.add_argument("--target-peak", type=float, default=0.95, help="Target peak amplitude for peak/rms_peak normalization")
     parser.add_argument("--target-rms", type=float, default=0.12, help="Target RMS for rms/rms_peak normalization")
     parser.add_argument("--remove-dc", action="store_true", help="Subtract mean from each clip before normalization")
+    parser.add_argument("--resample-method", choices=["linear", "polyphase"], default="linear",
+                        help="Resampling algorithm: linear (default) or polyphase (bandlimited Kaiser-windowed sinc)")
+    parser.add_argument("--stereo-downmix", choices=["average", "left", "right", "error"], default="average",
+                        help="Downmixing strategy for multi-channel source audio: average (default), left, right, error")
     parser.add_argument("--limit", type=int, default=0, help="Optional limit on number of discovered files (0 = all)")
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing converted files")
     return parser.parse_args()
@@ -59,7 +63,35 @@ def collect_audio_paths(input_dir):
     return sorted(paths)
 
 
-def read_wav_mono_float32(path):
+def resample_polyphase(audio, src_rate, dst_rate, half_width=12):
+    """Bandlimited polyphase Kaiser-windowed sinc resampler in pure NumPy."""
+    if src_rate == dst_rate or len(audio) == 0:
+        return audio.astype(np.float32)
+    dst_len = max(1, int(round(len(audio) * (float(dst_rate) / float(src_rate)))))
+    cutoff = min(1.0, float(dst_rate) / float(src_rate))
+    t_out = np.arange(dst_len, dtype=np.float64) * (float(src_rate) / float(dst_rate))
+    indices = np.arange(-half_width, half_width + 1, dtype=int)
+
+    t_floor = np.floor(t_out).astype(int)
+    frac = t_out - t_floor
+    sample_indices = t_floor[:, None] + indices[None, :]
+    valid_mask = (sample_indices >= 0) & (sample_indices < len(audio))
+    clamped_indices = np.clip(sample_indices, 0, max(0, len(audio) - 1)).astype(int)
+
+    dt = indices[None, :].astype(np.float64) - frac[:, None]
+    sinc_val = np.sinc(dt * cutoff)
+    kaiser_w = np.kaiser(2 * half_width + 1, 6.0).astype(np.float64)
+    kernel = sinc_val * kaiser_w[None, :] * cutoff
+
+    k_sum = np.sum(kernel, axis=-1, keepdims=True)
+    kernel = np.where(np.abs(k_sum) > 1e-8, kernel / k_sum, kernel)
+
+    gathered = audio[clamped_indices]
+    out = np.sum(gathered * kernel * valid_mask, axis=-1)
+    return out.astype(np.float32)
+
+
+def read_wav_mono_float32(path, stereo_downmix="average"):
     with wave.open(str(path), "rb") as wf:
         channels = wf.getnchannels()
         src_rate = int(wf.getframerate())
@@ -68,7 +100,16 @@ def read_wav_mono_float32(path):
 
     audio = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32767.0
     if channels > 1:
-        audio = audio.reshape(-1, channels).mean(axis=1)
+        if stereo_downmix == "average":
+            audio = audio.reshape(-1, channels).mean(axis=1)
+        elif stereo_downmix == "left":
+            audio = audio.reshape(-1, channels)[:, 0]
+        elif stereo_downmix == "right":
+            audio = audio.reshape(-1, channels)[:, 1]
+        elif stereo_downmix == "error":
+            raise ValueError(f"Encountered multi-channel audio ({channels} channels) in {path} with --stereo-downmix error")
+        else:
+            audio = audio.reshape(-1, channels).mean(axis=1)
     return audio, src_rate
 
 
@@ -238,8 +279,11 @@ def convert_one_file(path, input_root, output_root, args, ffmpeg_bin, ffprobe_bi
         else:
             if path.suffix.lower() not in {".wav", ".wave"}:
                 raise RuntimeError("ffmpeg is required for non-WAV inputs")
-            wav_audio, src_rate = read_wav_mono_float32(path)
-            audio = resample_linear(wav_audio, src_rate, args.target_sample_rate)
+            wav_audio, src_rate = read_wav_mono_float32(path, stereo_downmix=args.stereo_downmix)
+            if args.resample_method == "polyphase":
+                audio = resample_polyphase(wav_audio, src_rate, args.target_sample_rate)
+            else:
+                audio = resample_linear(wav_audio, src_rate, args.target_sample_rate)
             decode_mode = "wave_fallback"
 
         normalized, norm_stats = normalize_audio(
@@ -281,6 +325,8 @@ def convert_one_file(path, input_root, output_root, args, ffmpeg_bin, ffprobe_bi
                 "target_peak": float(args.target_peak),
                 "target_rms": float(args.target_rms),
                 "remove_dc": bool(args.remove_dc),
+                "resample_method": args.resample_method,
+                "stereo_downmix": args.stereo_downmix,
             },
             "normalization_stats": norm_stats,
         }

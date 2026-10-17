@@ -6,10 +6,12 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+import numpy as np
 
 # Add reporting to sys.path to read markdown reports
 root = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(root / "src" / "reporting"))
+sys.path.insert(0, str(root / "src" / "training"))
 from report_markdown import read_markdown_json_report
 
 
@@ -105,7 +107,50 @@ def main():
             f"STOI proxy={p_metrics['envelope_correlation_stoi_proxy']:.3f}"
         )
 
-    print("[+] All audio smoke tests passed successfully (Baseline, A1 Quantization, & A3 Perceptual Loss)")
+        # 4. Milestone A4 Robustness run (channels, polyphase resampling, noise augmentation)
+        print("[*] Running audio smoke test (Milestone A4 robustness: polyphase, noise augmentation)...")
+        robust_dir = tmp_path / "robust"
+        robust_report = run_audio_smoke([
+            "--channels", "mono",
+            "--stereo-downmix", "average",
+            "--resample-method", "polyphase",
+            "--augment-noise-std", "0.02",
+        ], robust_dir)
+
+        assert robust_report["config"]["channels"] == "mono", "Expected channels=mono"
+        assert robust_report["config"]["resample_method"] == "polyphase", "Expected resample_method=polyphase"
+        assert robust_report["config"]["stereo_downmix"] == "average", "Expected stereo_downmix=average"
+        assert robust_report["config"]["augment_noise_std"] == 0.02, "Expected augment_noise_std=0.02"
+        print("[+] Robustness training configuration passed")
+
+        # Corrupted / noisy input robustness assertion (Issue #40)
+        print("[*] Asserting graceful handling of corrupted/clipped WAV input...")
+        corrupt_wav = tmp_path / "corrupted_sample.wav"
+        with open(corrupt_wav, "wb") as f:
+            f.write(b"RIFF\x24\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x40\x1f\x00\x00")
+        
+        # Ingest through dataset pipeline and verify no crash, non-NaN, and finite values
+        from train_autoencoder_audio_local import make_dataset_from_audio_paths, build_audio_autoencoder
+        corrupt_ds = make_dataset_from_audio_paths(
+            [str(corrupt_wav)],
+            clip_len=1024,
+            sample_rate=16000,
+            batch_size=1,
+            shuffle=False,
+            repeat=False,
+            seed=42,
+            shuffle_buffer=1,
+            target_channels=1,
+            resample_method="polyphase",
+            augment_noise_std=0.01,
+        )
+        for x, y in corrupt_ds.take(1):
+            assert not np.any(np.isnan(x.numpy())), "NaN found in recovered corrupted audio"
+            assert not np.any(np.isinf(x.numpy())), "Inf found in recovered corrupted audio"
+            assert np.all(x.numpy() >= -1.0) and np.all(x.numpy() <= 1.0), "Audio amplitude outside [-1, 1]"
+        print("[+] Corrupted input handled gracefully without crash or divergence")
+
+    print("[+] All audio smoke tests passed successfully (Baseline, A1 Quantization, A3 Perceptual Loss, & A4 Robustness)")
 
 
 if __name__ == "__main__":

@@ -11,11 +11,11 @@ in `src/training/random_search_hyperparams.py` / `src/training/param_overrides.p
 | Area | Today |
 |---|---|
 | Architecture | Conv1D encoder (4 stages, stride-2, 16× downsample) → linear Dense bottleneck (no ReLU, preserves signed/phase-continuous values) → Conv1DTranspose decoder (16× upsample, no skip connections) → tanh output. Optional STE `StraightThroughQuantize` layer after bottleneck when `--latent-bit-depth > 0`. |
-| Data pipeline | `src/audio/prepare_audio_dataset.py` canonicalizes mp3/flac/ogg/m4a/aac/opus/wav → mono PCM16 WAV at a target sample rate with `none/peak/rms/rms_peak` normalization + JSON sidecar metadata. Trainer loads canonical WAVs, mono-downmixes, resamples via linear interpolation, pads/crops to a fixed `clip_len = sample_rate * clip_seconds`. |
+| Data pipeline | `src/audio/prepare_audio_dataset.py` canonicalizes mp3/flac/ogg/m4a/aac/opus/wav → mono PCM16 WAV at a target sample rate with `none/peak/rms/rms_peak` normalization + JSON sidecar metadata. **(Milestone A4 Complete)**: Configurable `--resample-method {linear,polyphase}` and `--stereo-downmix {average,left,right,error}`. |
 | Compression accounting | **Real & Theoretical (Milestone A1 Complete)**: Evaluation reports log both `estimated_input_to_latent_ratio` and measured `actual_latent_bytes_per_clip` / `actual_compression_ratio` computed via range coding and empirical Shannon entropy of the latent symbols. Gated behind `--latent-bit-depth` (default 0 / float32). |
 | Loss/metrics | Weighted MSE + L1 + STFT-magnitude loss with a "hard residual" upweighting term; tracks SNR (dB, primary) and PSNR. `TargetSNRCallback` stops early at `--target-snr-db` (default 90). **(Milestone A3 Complete)**: Configurable `--loss-profile {balanced,snr,perceptual}`, log-mel spectral loss via `tf.signal.linear_to_mel_weight_matrix`, psychoacoustic A-weighting spectral loss, and zero-dependency perceptual evaluation metrics (LSD in dB, A-LSD, and STOI envelope proxy). |
 | Real-time path | `src/audio/realtime_audio_compression_pipeline.py` provides a chunked Overlap-Add (OLA) streaming compression runtime using the trained autoencoder. `src/audio/realtime_audio_vortex_pipeline.py` is a **feature-extraction-only** pipeline (FFT band energies → visual "vortex" control signals for a demo) and does not run the autoencoder. |
-| Robustness | Mono-only (stereo is downmixed), fixed training sample rate (16 kHz) vs. fixed vortex demo rate (48 kHz), no noise augmentation, silent fallback-to-silence on WAV read failure. |
+| Robustness | **(Milestone A4 Complete)**: Configurable channel modes (`--channels {mono,stereo}`), explicit downmix strategies (`--stereo-downmix`), high-fidelity Kaiser-windowed polyphase sinc resampling (`--resample-method polyphase`), additive noise augmentation (`--augment-noise-std`), and structured corrupted-input recovery instead of silent fallback. |
 | Search & docs | `src/training/random_search_hyperparams.py` samples latent_dim/latent_bit_depth/filters/kernel/batch/epochs/lr/clip_seconds for audio; ranks by `snr_db_metric`. `--params-file` JSON `audio` section documented in `documentation/MODEL_PARAMS_INPUT.md`. |
 
 ## 2. Constraints (do not violate)
@@ -32,7 +32,7 @@ in `src/training/random_search_hyperparams.py` / `src/training/param_overrides.p
 - **G2 — Close the QAT gap**: train the model to tolerate the quantization it will actually be deployed with. [Landed in A1]
 - **G3 — Real-time compression inference**: extend (or add alongside) the vortex pipeline a streaming path that actually runs the trained autoencoder in chunks. [Landed in A2]
 - **G4 — Perceptual quality**: move beyond waveform/STFT-magnitude loss toward psychoacoustically-informed objectives. [Landed in A3]
-- **G5 — Robustness & multi-channel/rate support**: stereo, variable sample rate, noisy real-world input.
+- **G5 — Robustness & multi-channel/rate support**: stereo, variable sample rate, noisy real-world input. [Landed in A4]
 - **G6 — Discoverability**: docs, search space, and reports stay in sync as the above land.
 
 ## 4. Milestones
@@ -70,16 +70,16 @@ Issues:
 3. **[audio/loss] Introduce `--loss-profile {balanced,snr,perceptual}` presets (#35)** — mirrors the image trainer's `--loss-profile` convention; `balanced` matches current defaults exactly. *(Completed)*
 4. **[audio/eval] Add optional PESQ/STOI-style perceptual metric to evaluation report (#36)** — behind an opt-in flag if a suitable pure-Python/TF implementation is available; otherwise document as a future dependency decision. *(Completed)*
 
-### Milestone A4 — Data Pipeline Robustness (Multi-channel, Rate, Noise)
+### Milestone A4 — Data Pipeline Robustness (Multi-channel, Rate, Noise) (Completed)
 **Objective:** Remove the mono-only/fixed-sample-rate/no-augmentation assumptions.
 **Why:** Real-world audio is often stereo, comes at varied sample rates, and training never sees additive noise — robustness is untested.
-**Exit criteria:** Trainer supports an opt-in stereo mode (or documents the mono-only constraint explicitly as intentional), resampling method is configurable, and a noise-robustness smoke check exists.
+**Exit criteria:** Trainer supports an opt-in stereo mode (or documents the mono-only constraint explicitly as intentional), resampling method is configurable, and a noise-robustness smoke check exists. *(Achieved)*
 
 Issues:
-1. **[audio/data] Make stereo→mono downmixing explicit and opt-in vs. add a `--channels {mono,stereo}` mode (#37)** — decide and document the intended scope; if stereo is out of scope, add a clear `NotImplementedError`/docstring instead of silent averaging.
-2. **[audio/data] Replace linear-interpolation resampling with a configurable method (#38)** — `--resample-method {linear,polyphase}`, default `linear` to preserve current behavior.
-3. **[audio/data] Add optional additive noise augmentation during training (#39)** — `--augment-noise-std`, default 0 (off).
-4. **[audio/data] Add a corrupted/noisy-input robustness smoke check (#40)** — feed a clipped/corrupted WAV through inference and assert graceful handling (no crash, bounded SNR drop) instead of silent fallback-to-silence.
+1. **[audio/data] Make stereo→mono downmixing explicit and opt-in vs. add a `--channels {mono,stereo}` mode (#37)** — decide and document the intended scope; if stereo is out of scope, add a clear `NotImplementedError`/docstring instead of silent averaging. *(Completed)*
+2. **[audio/data] Replace linear-interpolation resampling with a configurable method (#38)** — `--resample-method {linear,polyphase}`, default `linear` to preserve current behavior. *(Completed)*
+3. **[audio/data] Add optional additive noise augmentation during training (#39)** — `--augment-noise-std`, default 0 (off). *(Completed)*
+4. **[audio/data] Add a corrupted/noisy-input robustness smoke check (#40)** — feed a clipped/corrupted WAV through inference and assert graceful handling (no crash, bounded SNR drop) instead of silent fallback-to-silence. *(Completed)*
 
 ### Milestone A5 — Reporting, Search & Docs Alignment
 **Objective:** Keep `src/training/random_search_hyperparams.py`, `documentation/*.md`, and evaluation reports consistent with A1–A4 as they land.

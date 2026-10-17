@@ -96,6 +96,32 @@ New `audio` flags (all default to preserving prior behavior):
 | `--mel-bins <int>` | `64` | Number of mel filterbank bins used when mel loss is active. |
 | `--eval-perceptual-metrics` | off | Compute zero-dependency perceptual metrics (LSD in dB, A-LSD in dB, STOI envelope proxy) in evaluation reports. |
 
+## Audio trainer: data pipeline robustness (Milestone A4)
+
+`train_autoencoder_audio_local.py` and `prepare_audio_dataset.py` support multi-channel input, bandlimited polyphase resampling, additive noise augmentation, and corrupted audio recovery:
+
+- **Channel modes (`--channels {mono,stereo}`)**:
+  - `mono` (default): 1-channel autoencoder architecture. Multi-channel audio files are downmixed according to `--stereo-downmix`.
+  - `stereo`: 2-channel autoencoder architecture with independent convolutional processing across stereo channels.
+- **Stereo downmix strategy (`--stereo-downmix {average,left,right,error}`)**:
+  - `average` (default): averages channels across the channel axis with clean warning logs.
+  - `left` / `right`: selects a discrete channel.
+  - `error`: strictly raises an exception if multi-channel input is detected.
+- **Resampling algorithm (`--resample-method {linear,polyphase}`)**:
+  - `linear` (default): fast linear interpolation (preserves prior benchmark behavior).
+  - `polyphase`: bandlimited Kaiser-windowed sinc interpolation with anti-aliasing FIR filtering in pure NumPy.
+- **Additive noise augmentation (`--augment-noise-std <float>`)**:
+  - Injects additive Gaussian noise into the training input (`--augment-noise-std`, default 0.0 / off) to train the model as a robust denoising autoencoder.
+- **Corrupted input recovery**:
+  - WAV ingest gracefully recovers from corrupted headers, invalid bytes, and clips NaN/Inf samples to valid dynamic ranges without pipeline crashes.
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `--channels {mono,stereo}` | `mono` | Channel architecture mode (1 channel for mono, 2 channels for stereo). |
+| `--stereo-downmix {average,left,right,error}` | `average` | Downmixing strategy for multi-channel source files when mono mode is active. |
+| `--resample-method {linear,polyphase}` | `linear` | Sample rate conversion algorithm: `linear` or `polyphase` (Kaiser sinc). |
+| `--augment-noise-std <float>` | `0.0` (off) | Standard deviation of additive Gaussian noise during training. |
+
 ## Learned image upscaler (Milestone 3)
 
 `train_upscaler_image_local.py` trains a small residual CNN + sub-pixel (depth-to-space) upsampler on the
