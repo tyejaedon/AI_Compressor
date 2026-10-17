@@ -166,6 +166,16 @@ Prepare canonical audio dataset (mp3/flac/ogg/wav -> mono PCM16 WAV + metadata):
 python src/audio/prepare_audio_dataset.py --input-dir data/AudioData --output-dir data/AudioData_canonical --target-sample-rate 16000 --output-format wav --normalization rms_peak --target-rms 0.12 --target-peak 0.95 --remove-dc
 ```
 
+Run real-time streaming audio compression (Milestone A2):
+
+```zsh
+# Run chunked overlap-add streaming inference through a trained autoencoder
+python src/audio/realtime_audio_compression_pipeline.py --model-path models/audio_local_run/<run>/best_audio_model.keras --stream-seconds 5.0
+```
+
+> [!NOTE]
+> `src/audio/realtime_audio_compression_pipeline.py` executes the actual trained neural autoencoder in chunked overlap-add windows over streaming PCM audio with bounded latency. This is distinct from `src/audio/realtime_audio_vortex_pipeline.py` / `src/audio/vortex_realtime_demo.py`, which are feature-extraction-only visualizers (FFT energy bands -> fluid simulation controls) that do not run model inference.
+
 Train video:
 
 ```zsh
@@ -204,6 +214,8 @@ python tests/smoke/smoke_test_random_search.py
 python tests/smoke/smoke_test_image_lossy_local.py
 python tests/smoke/smoke_test_upscaler_local.py
 python tests/smoke/smoke_test_audio_local.py
+python tests/smoke/smoke_test_realtime_audio_compression.py
+python tests/smoke/smoke_test_vortex_pipeline.py
 python tests/smoke/smoke_test_prepare_audio_dataset.py
 python tests/smoke/smoke_test_full_production_pipeline.py
 ```
