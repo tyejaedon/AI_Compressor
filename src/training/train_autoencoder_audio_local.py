@@ -208,6 +208,14 @@ def parse_args():
     parser.add_argument("--loss-a-weight", type=float, default=0.0, help="Weight for psychoacoustic A-weighted STFT loss")
     parser.add_argument("--mel-bins", type=int, default=64, help="Number of mel filterbank bins for mel loss")
     parser.add_argument("--eval-perceptual-metrics", action="store_true", help="Compute zero-dependency perceptual quality metrics (LSD in dB, STOI envelope proxy) on test set")
+    parser.add_argument("--channels", choices=["mono", "stereo"], default="mono",
+                        help="Audio channels architecture mode: mono (1 channel, default) or stereo (2 channels)")
+    parser.add_argument("--stereo-downmix", choices=["average", "left", "right", "error"], default="average",
+                        help="Downmixing strategy when input file is multi-channel but mono mode is active (default: average)")
+    parser.add_argument("--resample-method", choices=["linear", "polyphase"], default="linear",
+                        help="Resampling algorithm when input sample rate != target rate: linear (default) or polyphase (bandlimited Kaiser-windowed sinc)")
+    parser.add_argument("--augment-noise-std", type=float, default=0.0,
+                        help="Standard deviation of additive Gaussian noise augmentation during training (default: 0.0 / off)")
     parser.add_argument("--loss-hard-weight", type=float, default=1.5,
                         help="Extra penalty multiplier for large residuals")
     parser.add_argument("--loss-stft-power", type=float, default=1.5, help="Exponent for STFT mismatch penalty")
@@ -219,6 +227,37 @@ def parse_args():
     parser.set_defaults(export_tflite=True)
     return parser.parse_args()
 
+
+def resample_polyphase(audio, src_rate, dst_rate, half_width=12):
+    """Bandlimited polyphase Kaiser-windowed sinc resampler in pure NumPy."""
+    if src_rate == dst_rate or len(audio) == 0:
+        return audio
+    dst_len = max(1, int(round(len(audio) * (float(dst_rate) / float(src_rate)))))
+    cutoff = min(1.0, float(dst_rate) / float(src_rate))
+    t_out = np.arange(dst_len, dtype=np.float64) * (float(src_rate) / float(dst_rate))
+    indices = np.arange(-half_width, half_width + 1, dtype=int)
+
+    t_floor = np.floor(t_out).astype(int)
+    frac = t_out - t_floor
+    sample_indices = t_floor[:, None] + indices[None, :]
+    valid_mask = (sample_indices >= 0) & (sample_indices < len(audio))
+    clamped_indices = np.clip(sample_indices, 0, max(0, len(audio) - 1)).astype(int)
+
+    dt = indices[None, :].astype(np.float64) - frac[:, None]
+    sinc_val = np.sinc(dt * cutoff)
+    kaiser_w = np.kaiser(2 * half_width + 1, 6.0).astype(np.float64)
+    kernel = sinc_val * kaiser_w[None, :] * cutoff
+
+    k_sum = np.sum(kernel, axis=-1, keepdims=True)
+    kernel = np.where(np.abs(k_sum) > 1e-8, kernel / k_sum, kernel)
+
+    if audio.ndim == 1:
+        gathered = audio[clamped_indices]
+        out = np.sum(gathered * kernel * valid_mask, axis=-1)
+    else:
+        gathered = audio[clamped_indices]
+        out = np.sum(gathered * kernel[:, :, None] * valid_mask[:, :, None], axis=1)
+    return out.astype(np.float32)
 
 def resolve_loss_profile(args, provided_flags=None):
     if provided_flags is None:
@@ -269,17 +308,26 @@ def apply_preset(args):
     args.loss_mel_weight = max(0.0, float(args.loss_mel_weight))
     args.loss_a_weight = max(0.0, float(args.loss_a_weight))
     args.mel_bins = max(8, int(args.mel_bins))
+    args.channels = str(getattr(args, "channels", "mono")).lower()
+    args.num_channels = 2 if args.channels == "stereo" else 1
+    args.stereo_downmix = str(getattr(args, "stereo_downmix", "average")).lower()
+    args.resample_method = str(getattr(args, "resample_method", "linear")).lower()
+    args.augment_noise_std = max(0.0, float(getattr(args, "augment_noise_std", 0.0)))
     args = resolve_loss_profile(args)
     return args
 
 
-def write_wav_mono_int16(path, sample_rate, audio):
+def write_wav_int16(path, sample_rate, audio):
+    audio = np.asarray(audio, dtype=np.float32)
     pcm = np.clip(audio * 32767.0, -32768, 32767).astype(np.int16)
-    with wave.open(path, "wb") as wf:
-        wf.setnchannels(1)
+    num_channels = 1 if pcm.ndim == 1 else pcm.shape[1]
+    with wave.open(str(path), "wb") as wf:
+        wf.setnchannels(num_channels)
         wf.setsampwidth(2)
-        wf.setframerate(sample_rate)
+        wf.setframerate(int(sample_rate))
         wf.writeframes(pcm.tobytes())
+
+write_wav_mono_int16 = write_wav_int16
 
 
 def read_wav_mono_float32(path):
@@ -321,8 +369,22 @@ def split_indices(n, val_ratio, test_ratio, rng):
     return train_idx, val_idx, test_idx
 
 
-def make_dataset_from_audio_paths(paths, clip_len, sample_rate, batch_size, shuffle, repeat, seed, shuffle_buffer):
+def make_dataset_from_audio_paths(
+    paths,
+    clip_len,
+    sample_rate,
+    batch_size,
+    shuffle,
+    repeat,
+    seed,
+    shuffle_buffer,
+    target_channels=1,
+    stereo_downmix="average",
+    resample_method="linear",
+    augment_noise_std=0.0,
+):
     clip_len_i = int(clip_len)
+    target_channels = int(target_channels)
     random_crop = bool(shuffle)
     rng = np.random.default_rng(seed)
 
@@ -330,29 +392,68 @@ def make_dataset_from_audio_paths(paths, clip_len, sample_rate, batch_size, shuf
         path = path_bytes.decode("utf-8")
         try:
             with wave.open(path, "rb") as wf:
-                channels = wf.getnchannels()
+                channels_in_file = wf.getnchannels()
                 src_rate = int(wf.getframerate())
                 frames = wf.getnframes()
                 data = wf.readframes(frames)
             audio = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32767.0
         except Exception as e:
-            # Fallback if file is corrupted or unreadable
-            print(f"[!] Warning: failing to read WAV file {path}. Generating silence fallback. Err: {e}")
-            audio = np.zeros((clip_len_i,), dtype=np.float32)
-            channels = 1
+            print(f"[!] Warning: Failed to read WAV file {path} ({e}). Structured recovery tone synthesized.")
+            t_synth = np.linspace(0.0, 1.0, num=clip_len_i, endpoint=False, dtype=np.float32)
+            audio = (0.2 * np.sin(2.0 * np.pi * 440.0 * t_synth)).astype(np.float32)
+            channels_in_file = 1
             src_rate = sample_rate
 
-        if channels > 1 and len(audio) > 1:
-            audio = audio.reshape(-1, channels).mean(axis=1)
+        # Sanitize against NaNs, infinities, and extreme values
+        audio = np.nan_to_num(audio, nan=0.0, posinf=1.0, neginf=-1.0)
+        audio = np.clip(audio, -1.0, 1.0)
 
+        # Multi-channel / stereo handling (Milestone A4, Issue #37)
+        if target_channels == 1:
+            if channels_in_file > 1 and len(audio) > 1:
+                reshaped = audio.reshape(-1, channels_in_file)
+                if stereo_downmix == "average":
+                    audio = reshaped.mean(axis=1)
+                elif stereo_downmix == "left":
+                    audio = reshaped[:, 0]
+                elif stereo_downmix == "right":
+                    audio = reshaped[:, 1]
+                elif stereo_downmix == "error":
+                    raise ValueError(f"Encountered multi-channel audio ({channels_in_file} ch) in {path} with --stereo-downmix error")
+                else:
+                    audio = reshaped.mean(axis=1)
+        else:  # target_channels == 2 (stereo)
+            if channels_in_file == 1:
+                audio = np.stack([audio, audio], axis=-1)
+            elif channels_in_file >= 2:
+                audio = audio.reshape(-1, channels_in_file)[:, :2]
+
+        # Configurable resampling (Milestone A4, Issue #38)
         if src_rate != sample_rate and len(audio) > 1:
-            src_x = np.linspace(0.0, 1.0, num=len(audio), endpoint=False, dtype=np.float32)
-            dst_len = max(1, int(round(len(audio) * (sample_rate / float(src_rate)))))
-            dst_x = np.linspace(0.0, 1.0, num=dst_len, endpoint=False, dtype=np.float32)
-            audio = np.interp(dst_x, src_x, audio).astype(np.float32)
+            if resample_method == "polyphase":
+                audio = resample_polyphase(audio, src_rate, sample_rate)
+            else:
+                if audio.ndim == 1:
+                    src_x = np.linspace(0.0, 1.0, num=len(audio), endpoint=False, dtype=np.float32)
+                    dst_len = max(1, int(round(len(audio) * (sample_rate / float(src_rate)))))
+                    dst_x = np.linspace(0.0, 1.0, num=dst_len, endpoint=False, dtype=np.float32)
+                    audio = np.interp(dst_x, src_x, audio).astype(np.float32)
+                else:
+                    chans = []
+                    for c in range(audio.shape[1]):
+                        src_x = np.linspace(0.0, 1.0, num=len(audio), endpoint=False, dtype=np.float32)
+                        dst_len = max(1, int(round(len(audio) * (sample_rate / float(src_rate)))))
+                        dst_x = np.linspace(0.0, 1.0, num=dst_len, endpoint=False, dtype=np.float32)
+                        chans.append(np.interp(dst_x, src_x, audio[:, c]).astype(np.float32))
+                    audio = np.stack(chans, axis=-1)
+
+        # Ensure correct channel dimension
+        if audio.ndim == 1:
+            audio = np.expand_dims(audio, axis=-1)
 
         if len(audio) < clip_len_i:
-            audio = np.pad(audio, (0, clip_len_i - len(audio)), mode="constant")
+            pad_width = ((0, clip_len_i - len(audio)), (0, 0))
+            audio = np.pad(audio, pad_width, mode="constant")
 
         max_start = max(0, len(audio) - clip_len_i)
         if random_crop and max_start > 0:
@@ -360,14 +461,21 @@ def make_dataset_from_audio_paths(paths, clip_len, sample_rate, batch_size, shuf
         else:
             start = max_start // 2
 
-        clip = np.asarray(audio[start: start + clip_len_i], dtype=np.float32)
-        clip = np.clip(clip, -1.0, 1.0)
-        return np.expand_dims(clip, axis=-1)
+        clean_clip = np.asarray(audio[start: start + clip_len_i], dtype=np.float32)
+        clean_clip = np.clip(clean_clip, -1.0, 1.0)
+
+        # Additive noise augmentation (Milestone A4, Issue #39)
+        if augment_noise_std > 0.0 and random_crop:
+            noise = rng.normal(0.0, augment_noise_std, size=clean_clip.shape).astype(np.float32)
+            noisy_clip = np.clip(clean_clip + noise, -1.0, 1.0)
+            return noisy_clip, clean_clip
+        return clean_clip, clean_clip
 
     def _decode(path):
-        clip = tf.numpy_function(_decode_np, [path], tf.float32)
-        clip.set_shape([clip_len_i, 1])
-        return clip, clip
+        x, y = tf.numpy_function(_decode_np, [path], [tf.float32, tf.float32])
+        x.set_shape([clip_len_i, target_channels])
+        y.set_shape([clip_len_i, target_channels])
+        return x, y
 
     ds = tf.data.Dataset.from_tensor_slices(paths)
     if shuffle:
@@ -414,6 +522,10 @@ def build_real_audio_datasets(args, clip_len):
         repeat=True,
         seed=args.seed,
         shuffle_buffer=args.shuffle_buffer,
+        target_channels=args.num_channels,
+        stereo_downmix=args.stereo_downmix,
+        resample_method=args.resample_method,
+        augment_noise_std=args.augment_noise_std,
     )
     val_data = make_dataset_from_audio_paths(
         val_paths,
@@ -424,6 +536,10 @@ def build_real_audio_datasets(args, clip_len):
         repeat=True,
         seed=args.seed + 1,
         shuffle_buffer=args.shuffle_buffer,
+        target_channels=args.num_channels,
+        stereo_downmix=args.stereo_downmix,
+        resample_method=args.resample_method,
+        augment_noise_std=0.0,
     )
     test_data = make_dataset_from_audio_paths(
         test_paths,
@@ -434,6 +550,10 @@ def build_real_audio_datasets(args, clip_len):
         repeat=False,  # Evaluated explicitly without inf loop repeats
         seed=args.seed + 2,
         shuffle_buffer=args.shuffle_buffer,
+        target_channels=args.num_channels,
+        stereo_downmix=args.stereo_downmix,
+        resample_method=args.resample_method,
+        augment_noise_std=0.0,
     )
 
     counts = {
@@ -532,8 +652,9 @@ def make_audio_loss(
             loss = loss + l1_w * l1
 
         if need_stft:
-            y_t = tf.squeeze(y_true, axis=-1)
-            y_p = tf.squeeze(y_pred, axis=-1)
+            clip_len_t = tf.shape(y_true)[1]
+            y_t = tf.reshape(tf.transpose(y_true, [0, 2, 1]), [-1, clip_len_t])
+            y_p = tf.reshape(tf.transpose(y_pred, [0, 2, 1]), [-1, clip_len_t])
             stft_true = tf.signal.stft(y_t, frame_length=frame_length, frame_step=frame_step)
             stft_pred = tf.signal.stft(y_p, frame_length=frame_length, frame_step=frame_step)
             mag_true = tf.abs(stft_true)
@@ -581,6 +702,7 @@ def build_audio_autoencoder(
         quant_noise_anneal=False,
         model_base_filters=48,
         model_kernel_size=5,
+        channels=1,
 ):
     """
     FIXED HIGH-FIDELITY ARCHITECTURE:
@@ -594,7 +716,8 @@ def build_audio_autoencoder(
        and independently from the Compressed Latent Bottleneck during inference!
     5. Inserts opt-in Straight-Through Estimator (STE) bit-depth quantization (Milestone A1).
     """
-    inputs = layers.Input(shape=(clip_len, 1))
+    num_channels = int(channels)
+    inputs = layers.Input(shape=(clip_len, num_channels))
     base_filters = max(16, int(model_base_filters))
     kernel_size = max(1, int(model_kernel_size))
 
@@ -654,7 +777,7 @@ def build_audio_autoencoder(
     x_dec = layers.Conv1DTranspose(base_filters, kernel_size, strides=2, padding="same", activation="relu")(x_dec)
 
     # Squeeze Output projection
-    outputs = layers.Conv1D(1, kernel_size, padding="same", activation="tanh")(x_dec)
+    outputs = layers.Conv1D(num_channels, kernel_size, padding="same", activation="tanh")(x_dec)
 
     return Model(inputs, outputs, name="audio_autoencoder")
 
@@ -705,23 +828,26 @@ def save_audio_preview(model, test_data, run_dir, sample_rate):
     wav_path = os.path.join(run_dir, "audio_preview_reconstruction.wav")
 
     for x, _ in test_data.take(1):
-        pred = model.predict(x[:1], verbose=0)[0, :, 0]
-        src = x[0, :, 0].numpy()
+        pred = model.predict(x[:1], verbose=0)[0]
+        src = x[0].numpy() if hasattr(x[0], "numpy") else np.asarray(x[0])
+
+        src_disp = src[:, 0] if src.ndim > 1 else src
+        pred_disp = pred[:, 0] if pred.ndim > 1 else pred
 
         fig, axes = plt.subplots(2, 1, figsize=(12, 5), sharex=True)
-        axes[0].plot(src)
-        axes[0].set_title("Original Waveform")
+        axes[0].plot(src_disp)
+        axes[0].set_title("Original Waveform" + (" (Ch 0)" if src.ndim > 1 and src.shape[1] > 1 else ""))
         axes[0].grid(True, alpha=0.3)
 
-        axes[1].plot(pred, color="orange")
-        axes[1].set_title("Decoded Waveform (Post-Fixes)")
+        axes[1].plot(pred_disp, color="orange")
+        axes[1].set_title("Decoded Waveform" + (" (Ch 0)" if pred.ndim > 1 and pred.shape[1] > 1 else ""))
         axes[1].grid(True, alpha=0.3)
 
         fig.tight_layout()
         fig.savefig(plot_path, dpi=140)
         plt.close(fig)
 
-        write_wav_mono_int16(wav_path, sample_rate, pred)
+        write_wav_int16(wav_path, sample_rate, pred)
         break
 
     return plot_path, wav_path
@@ -789,10 +915,11 @@ def run_mp3_benchmark(model, test_data, run_dir, sample_rate):
     return report_path
 
 
-def compute_audio_compression_accounting(model, test_data, clip_len, latent_dim, latent_bits, latent_bit_depth=0):
-    """Computes both theoretical and actual compression metrics side by side (Milestone A1)."""
-    input_pcm_bytes_per_clip = int(clip_len) * 2  # 16-bit PCM (2 bytes per sample)
-    input_bits = int(clip_len) * 16
+def compute_audio_compression_accounting(model, test_data, clip_len, latent_dim, latent_bits, latent_bit_depth=0, channels=1):
+    """Computes both theoretical and actual compression metrics side by side (Milestones A1 & A4)."""
+    ch = max(1, int(channels))
+    input_pcm_bytes_per_clip = int(clip_len) * ch * 2  # 16-bit PCM (2 bytes per sample per channel)
+    input_bits = int(clip_len) * ch * 16
     latent_bits_total = max(1, int(latent_dim) * int(max(1, latent_bits)))
     estimated_ratio = float(input_bits / latent_bits_total)
 
@@ -1092,6 +1219,7 @@ def main():
         quant_noise_anneal=args.quant_noise_anneal,
         model_base_filters=args.model_base_filters,
         model_kernel_size=args.model_kernel_size,
+        channels=args.num_channels,
     )
     loss_fn = make_audio_loss(
         args.loss_mse_weight,
@@ -1160,6 +1288,7 @@ def main():
         args.latent_dim,
         args.latent_bits,
         latent_bit_depth=args.latent_bit_depth,
+        channels=args.num_channels,
     )
     perceptual_metrics = None
     if args.eval_perceptual_metrics:
@@ -1181,6 +1310,10 @@ def main():
     print(f"[+] Test PSNR: {float(eval_values.get('psnr_metric', float('nan'))):.3f}")
     print(f"[+] Test SNR(dB): {float(eval_values.get('snr_db_metric', float('nan'))):.3f}")
     print(f"[+] Target SNR(dB): {args.target_snr_db:.3f}")
+    print(f"[+] Channels: {args.channels} ({args.num_channels} ch), downmix: {args.stereo_downmix}")
+    print(f"[+] Resample method: {args.resample_method}")
+    if args.augment_noise_std > 0.0:
+        print(f"[+] Additive noise augmentation std: {args.augment_noise_std:.4f}")
     print(f"[+] Loss profile: {args.loss_profile}")
     print(
         f"[+] Loss weights (mse/l1/stft/mel/a_weight): "

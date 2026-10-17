@@ -161,6 +161,9 @@ python src/training/train_autoencoder_audio_local.py --preset m1-air-balanced --
 
 # Milestone A3: Perceptual quality training with psychoacoustic A-weighting, log-mel loss, and perceptual evaluation
 python src/training/train_autoencoder_audio_local.py --preset m1-air-balanced --loss-profile perceptual --eval-perceptual-metrics --output-root models/audio_local_run
+
+# Milestone A4: Robust audio training with polyphase resampling, noise augmentation, and multi-channel support
+python src/training/train_autoencoder_audio_local.py --preset m1-air-balanced --channels mono --resample-method polyphase --augment-noise-std 0.02 --output-root models/audio_local_run
 ```
 
 Prepare canonical audio dataset (mp3/flac/ogg/wav -> mono PCM16 WAV + metadata):

@@ -47,6 +47,10 @@ def main():
         "--target-peak",
         "0.95",
         "--remove-dc",
+        "--resample-method",
+        "polyphase",
+        "--stereo-downmix",
+        "average",
         "--overwrite",
     ]
     subprocess.check_call(cmd)
@@ -57,6 +61,14 @@ def main():
 
     if not out_audio.exists() or not sidecar.exists() or not report.exists():
         raise RuntimeError("Expected output audio, metadata sidecar, and report were not created")
+
+    import json
+    sidecar_data = json.loads(sidecar.read_text(encoding="utf-8"))
+    conv_settings = sidecar_data.get("conversion_settings", {})
+    if conv_settings.get("resample_method") != "polyphase":
+        raise RuntimeError(f"Expected resample_method polyphase, got {conv_settings.get('resample_method')}")
+    if conv_settings.get("stereo_downmix") != "average":
+        raise RuntimeError(f"Expected stereo_downmix average, got {conv_settings.get('stereo_downmix')}")
 
     print("[+] Audio dataset preparation smoke test passed")
 
