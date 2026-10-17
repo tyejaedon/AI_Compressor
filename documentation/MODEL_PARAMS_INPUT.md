@@ -76,6 +76,26 @@ New `audio` flags (all default to preserving prior behavior):
 | `--latent-bit-depth <int>` | `0` (disabled/float32) | Discrete quantization bit-depth for the latent vector (e.g. `8` for 256 levels). When `0`, leaves the latent as standard unquantized float32. |
 | `--quant-noise-anneal` | off | Linearly fades additive quantization noise from full strength to zero across training epochs so the network smoothly adapts to discrete levels. |
 
+## Audio trainer: perceptual quality & psychoacoustic loss (Milestone A3)
+
+`train_autoencoder_audio_local.py` supports configurable loss profiles and perceptual frequency-domain losses:
+
+- **Loss profiles (`--loss-profile`)**:
+  - `balanced` (default): reproduces baseline weights `(mse=0.55, l1=0.10, stft=0.35, mel=0.0, a_weight=0.0)`.
+  - `snr`: heavily focuses on time-domain waveform alignment `(mse=0.70, l1=0.15, stft=0.15, mel=0.0, a_weight=0.0)`.
+  - `perceptual`: emphasizes psychoacoustic frequency sensitivity `(mse=0.20, l1=0.05, stft=0.15, mel=0.35, a_weight=0.25)`.
+- **Log-Mel spectral loss (`--loss-mel-weight`)**: computes L1 distance over log-mel spectrograms generated via `tf.signal.linear_to_mel_weight_matrix`.
+- **A-weighted STFT loss (`--loss-a-weight`)**: applies the IEC 61672:2003 A-weighting frequency sensitivity curve to the STFT magnitude error, penalizing artifacts most heavily where human hearing is most sensitive (~2.5–3 kHz).
+- **Perceptual evaluation metrics (`--eval-perceptual-metrics`)**: evaluates zero-dependency perceptual audio quality on the test set, computing Log-Spectral Distance (LSD in dB), A-weighted LSD, and sub-band envelope correlation (STOI proxy).
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `--loss-profile {balanced,snr,perceptual}` | `balanced` | Loss profile preset. `balanced` reproduces default baseline behavior. |
+| `--loss-mel-weight <float>` | `0.0` (or per profile) | Weight for log-mel spectral envelope loss term. |
+| `--loss-a-weight <float>` | `0.0` (or per profile) | Weight for psychoacoustic A-weighted STFT magnitude loss. |
+| `--mel-bins <int>` | `64` | Number of mel filterbank bins used when mel loss is active. |
+| `--eval-perceptual-metrics` | off | Compute zero-dependency perceptual metrics (LSD in dB, A-LSD in dB, STOI envelope proxy) in evaluation reports. |
+
 ## Learned image upscaler (Milestone 3)
 
 `train_upscaler_image_local.py` trains a small residual CNN + sub-pixel (depth-to-space) upsampler on the

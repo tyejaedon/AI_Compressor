@@ -13,7 +13,7 @@ in `src/training/random_search_hyperparams.py` / `src/training/param_overrides.p
 | Architecture | Conv1D encoder (4 stages, stride-2, 16× downsample) → linear Dense bottleneck (no ReLU, preserves signed/phase-continuous values) → Conv1DTranspose decoder (16× upsample, no skip connections) → tanh output. Optional STE `StraightThroughQuantize` layer after bottleneck when `--latent-bit-depth > 0`. |
 | Data pipeline | `src/audio/prepare_audio_dataset.py` canonicalizes mp3/flac/ogg/m4a/aac/opus/wav → mono PCM16 WAV at a target sample rate with `none/peak/rms/rms_peak` normalization + JSON sidecar metadata. Trainer loads canonical WAVs, mono-downmixes, resamples via linear interpolation, pads/crops to a fixed `clip_len = sample_rate * clip_seconds`. |
 | Compression accounting | **Real & Theoretical (Milestone A1 Complete)**: Evaluation reports log both `estimated_input_to_latent_ratio` and measured `actual_latent_bytes_per_clip` / `actual_compression_ratio` computed via range coding and empirical Shannon entropy of the latent symbols. Gated behind `--latent-bit-depth` (default 0 / float32). |
-| Loss/metrics | Weighted MSE + L1 + STFT-magnitude loss with a "hard residual" upweighting term; tracks SNR (dB, primary) and PSNR. `TargetSNRCallback` stops early at `--target-snr-db` (default 90). |
+| Loss/metrics | Weighted MSE + L1 + STFT-magnitude loss with a "hard residual" upweighting term; tracks SNR (dB, primary) and PSNR. `TargetSNRCallback` stops early at `--target-snr-db` (default 90). **(Milestone A3 Complete)**: Configurable `--loss-profile {balanced,snr,perceptual}`, log-mel spectral loss via `tf.signal.linear_to_mel_weight_matrix`, psychoacoustic A-weighting spectral loss, and zero-dependency perceptual evaluation metrics (LSD in dB, A-LSD, and STOI envelope proxy). |
 | Real-time path | `src/audio/realtime_audio_compression_pipeline.py` provides a chunked Overlap-Add (OLA) streaming compression runtime using the trained autoencoder. `src/audio/realtime_audio_vortex_pipeline.py` is a **feature-extraction-only** pipeline (FFT band energies → visual "vortex" control signals for a demo) and does not run the autoencoder. |
 | Robustness | Mono-only (stereo is downmixed), fixed training sample rate (16 kHz) vs. fixed vortex demo rate (48 kHz), no noise augmentation, silent fallback-to-silence on WAV read failure. |
 | Search & docs | `src/training/random_search_hyperparams.py` samples latent_dim/latent_bit_depth/filters/kernel/batch/epochs/lr/clip_seconds for audio; ranks by `snr_db_metric`. `--params-file` JSON `audio` section documented in `documentation/MODEL_PARAMS_INPUT.md`. |
@@ -31,7 +31,7 @@ in `src/training/random_search_hyperparams.py` / `src/training/param_overrides.p
 - **G1 — Real compression accounting**: measure actual bits/sample, not a theoretical ratio. [Landed in A1]
 - **G2 — Close the QAT gap**: train the model to tolerate the quantization it will actually be deployed with. [Landed in A1]
 - **G3 — Real-time compression inference**: extend (or add alongside) the vortex pipeline a streaming path that actually runs the trained autoencoder in chunks. [Landed in A2]
-- **G4 — Perceptual quality**: move beyond waveform/STFT-magnitude loss toward psychoacoustically-informed objectives.
+- **G4 — Perceptual quality**: move beyond waveform/STFT-magnitude loss toward psychoacoustically-informed objectives. [Landed in A3]
 - **G5 — Robustness & multi-channel/rate support**: stereo, variable sample rate, noisy real-world input.
 - **G6 — Discoverability**: docs, search space, and reports stay in sync as the above land.
 
@@ -59,16 +59,16 @@ Issues:
 3. **[audio/streaming] Add a smoke test for streaming inference (#31)** — `tests/smoke/smoke_test_realtime_audio_compression.py`, tiny model + short synthetic stream, asserts output shape/latency bounds. *(Completed)*
 4. **[audio/docs] Document the real-time compression path and its relationship to the vortex demo (#32)** — clarify in README that the vortex pipeline is visualization-only. *(Completed)*
 
-### Milestone A3 — Perceptual Quality & Psychoacoustic Loss
+### Milestone A3 — Perceptual Quality & Psychoacoustic Loss (Completed)
 **Objective:** Move the loss function beyond MSE/L1/STFT-magnitude toward perceptually-weighted objectives.
 **Why:** Current loss treats all frequencies/samples equally (aside from the "hard residual" weighting); no mel-scale, A-weighting, or loudness-aware terms exist.
-**Exit criteria:** New optional loss terms are available via `--loss-profile` (mirroring the image trainer's pattern), default profile reproduces current benchmark behavior exactly.
+**Exit criteria:** New optional loss terms are available via `--loss-profile` (mirroring the image trainer's pattern), default profile reproduces current benchmark behavior exactly. *(Achieved)*
 
 Issues:
-1. **[audio/loss] Add a mel-scale/log-mel spectral loss option (#33)** — `--loss-mel-weight`, computed via `tf.signal.linear_to_mel_weight_matrix`.
-2. **[audio/loss] Add an A-weighting (or simplified perceptual weighting) term (#34)** — approximate psychoacoustic frequency sensitivity curve applied to the STFT magnitude loss.
-3. **[audio/loss] Introduce `--loss-profile {balanced,snr,perceptual}` presets (#35)** — mirrors the image trainer's `--loss-profile` convention; `balanced` matches current defaults exactly.
-4. **[audio/eval] Add optional PESQ/STOI-style perceptual metric to evaluation report (#36)** — behind an opt-in flag if a suitable pure-Python/TF implementation is available; otherwise document as a future dependency decision.
+1. **[audio/loss] Add a mel-scale/log-mel spectral loss option (#33)** — `--loss-mel-weight`, computed via `tf.signal.linear_to_mel_weight_matrix`. *(Completed)*
+2. **[audio/loss] Add an A-weighting (or simplified perceptual weighting) term (#34)** — approximate psychoacoustic frequency sensitivity curve applied to the STFT magnitude loss. *(Completed)*
+3. **[audio/loss] Introduce `--loss-profile {balanced,snr,perceptual}` presets (#35)** — mirrors the image trainer's `--loss-profile` convention; `balanced` matches current defaults exactly. *(Completed)*
+4. **[audio/eval] Add optional PESQ/STOI-style perceptual metric to evaluation report (#36)** — behind an opt-in flag if a suitable pure-Python/TF implementation is available; otherwise document as a future dependency decision. *(Completed)*
 
 ### Milestone A4 — Data Pipeline Robustness (Multi-channel, Rate, Noise)
 **Objective:** Remove the mono-only/fixed-sample-rate/no-augmentation assumptions.

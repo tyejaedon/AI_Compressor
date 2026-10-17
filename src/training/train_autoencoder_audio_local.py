@@ -199,9 +199,15 @@ def parse_args():
     parser.add_argument("--real-file-limit", type=int, default=0, help="Optional cap for real audio files")
     parser.add_argument("--target-snr-db", type=float, default=90.0, help="Validation SNR(dB) target")
     parser.add_argument("--disable-target-snr-stop", action="store_true", help="Disable SNR-target early stopping")
+    parser.add_argument("--loss-profile", choices=["balanced", "snr", "perceptual"], default="balanced",
+                        help="Loss profile preset: balanced (default, preserves baseline), snr (time-domain focus), perceptual (mel + A-weighting focus)")
     parser.add_argument("--loss-mse-weight", type=float, default=0.55, help="Weight for weighted MSE term")
     parser.add_argument("--loss-l1-weight", type=float, default=0.10, help="Weight for weighted L1 term")
     parser.add_argument("--loss-stft-weight", type=float, default=0.35, help="Weight for STFT magnitude loss")
+    parser.add_argument("--loss-mel-weight", type=float, default=0.0, help="Weight for log-mel spectral envelope loss")
+    parser.add_argument("--loss-a-weight", type=float, default=0.0, help="Weight for psychoacoustic A-weighted STFT loss")
+    parser.add_argument("--mel-bins", type=int, default=64, help="Number of mel filterbank bins for mel loss")
+    parser.add_argument("--eval-perceptual-metrics", action="store_true", help="Compute zero-dependency perceptual quality metrics (LSD in dB, STOI envelope proxy) on test set")
     parser.add_argument("--loss-hard-weight", type=float, default=1.5,
                         help="Extra penalty multiplier for large residuals")
     parser.add_argument("--loss-stft-power", type=float, default=1.5, help="Exponent for STFT mismatch penalty")
@@ -212,6 +218,34 @@ def parse_args():
     parser.add_argument("--run-mp3-benchmark", action="store_true", help="Benchmark recon quality against MP3")
     parser.set_defaults(export_tflite=True)
     return parser.parse_args()
+
+
+def resolve_loss_profile(args, provided_flags=None):
+    if provided_flags is None:
+        provided_flags = {token.split("=", 1)[0] for token in sys.argv[1:] if token.startswith("--")}
+    loss_flags = [
+        "--loss-mse-weight",
+        "--loss-l1-weight",
+        "--loss-stft-weight",
+        "--loss-mel-weight",
+        "--loss-a-weight",
+    ]
+    # If no explicit loss weight flags were passed on CLI, apply the chosen profile
+    if not any(f in provided_flags for f in loss_flags):
+        loss_profiles = {
+            # (MSE, L1, STFT, Mel, A-weighted)
+            "balanced": (0.55, 0.10, 0.35, 0.0, 0.0),
+            "snr": (0.70, 0.15, 0.15, 0.0, 0.0),
+            "perceptual": (0.20, 0.05, 0.15, 0.35, 0.25),
+        }
+        if args.loss_profile in loss_profiles:
+            w_mse, w_l1, w_stft, w_mel, w_a = loss_profiles[args.loss_profile]
+            args.loss_mse_weight = float(w_mse)
+            args.loss_l1_weight = float(w_l1)
+            args.loss_stft_weight = float(w_stft)
+            args.loss_mel_weight = float(w_mel)
+            args.loss_a_weight = float(w_a)
+    return args
 
 
 def apply_preset(args):
@@ -229,6 +263,13 @@ def apply_preset(args):
     args.loss_hard_weight = max(0.0, float(args.loss_hard_weight))
     args.loss_stft_power = max(1.0, float(args.loss_stft_power))
     args.latent_bit_depth = max(0, int(args.latent_bit_depth))
+    args.loss_mse_weight = max(0.0, float(args.loss_mse_weight))
+    args.loss_l1_weight = max(0.0, float(args.loss_l1_weight))
+    args.loss_stft_weight = max(0.0, float(args.loss_stft_weight))
+    args.loss_mel_weight = max(0.0, float(args.loss_mel_weight))
+    args.loss_a_weight = max(0.0, float(args.loss_a_weight))
+    args.mel_bins = max(8, int(args.mel_bins))
+    args = resolve_loss_profile(args)
     return args
 
 
@@ -404,31 +445,75 @@ def build_real_audio_datasets(args, clip_len):
     return train_data, val_data, test_data, counts
 
 
-def stft_mag_loss(y_true, y_pred, power=1.0):
-    y_true = tf.squeeze(y_true, axis=-1)
-    y_pred = tf.squeeze(y_pred, axis=-1)
-    clip_len = tf.shape(y_true)[1]
-    # Optimal frame length balances mathematical time vs spectral resolution splits
-    frame_length = tf.maximum(16, tf.minimum(512, clip_len))
-    frame_step = tf.maximum(1, frame_length // 4)
+def compute_a_weighting_vector(num_spectrogram_bins, sample_rate):
+    """Computes IEC 61672:2003 A-weighting frequency sensitivity gain vector for linear STFT bins."""
+    freqs = np.linspace(0.0, float(sample_rate) / 2.0, int(num_spectrogram_bins), dtype=np.float32)
+    f_sq_safe = np.maximum(freqs ** 2, 1e-12)
+    c1 = 12194.0 ** 2
+    c2 = 20.6 ** 2
+    c3 = 107.7 ** 2
+    c4 = 737.9 ** 2
+    c5 = 12194.0 ** 2
+    num = c1 * (f_sq_safe ** 2)
+    den = (f_sq_safe + c2) * np.sqrt((f_sq_safe + c3) * (f_sq_safe + c4)) * (f_sq_safe + c5)
+    r_a = 1.2589 * (num / den)
+    r_a[freqs == 0.0] = 0.0
+    return tf.constant(r_a, dtype=tf.float32)
 
-    stft_true = tf.signal.stft(y_true, frame_length=frame_length, frame_step=frame_step)
-    stft_pred = tf.signal.stft(y_pred, frame_length=frame_length, frame_step=frame_step)
 
-    # Squeeze STFT magnitudes directly
-    mag_delta = tf.abs(tf.abs(stft_true) - tf.abs(stft_pred))
-    return tf.reduce_mean(tf.pow(mag_delta + 1e-6, float(max(1.0, power))))
-
-
-def make_audio_loss(mse_weight, l1_weight, stft_weight, hard_weight=1.5, stft_power=1.5):
-    mse_w = float(mse_weight)
-    l1_w = float(l1_weight)
-    stft_w = float(stft_weight)
+def make_audio_loss(
+    mse_weight,
+    l1_weight,
+    stft_weight,
+    mel_weight=0.0,
+    a_weight=0.0,
+    hard_weight=1.5,
+    stft_power=1.5,
+    sample_rate=16000,
+    clip_len=16000,
+    num_mel_bins=64,
+):
+    """
+    Composite audio loss combining:
+    - Time-domain weighted MSE & L1 with non-linear hard residual scaling
+    - STFT spectral magnitude mismatch
+    - Psychoacoustic A-weighted spectral magnitude loss (Milestone A3, Issue #34)
+    - Log-mel spectral envelope loss via tf.signal.linear_to_mel_weight_matrix (Milestone A3, Issue #33)
+    """
+    mse_w = max(0.0, float(mse_weight))
+    l1_w = max(0.0, float(l1_weight))
+    stft_w = max(0.0, float(stft_weight))
+    mel_w = max(0.0, float(mel_weight))
+    a_w = max(0.0, float(a_weight))
     hard_w = max(0.0, float(hard_weight))
     stft_p = max(1.0, float(stft_power))
 
-    total = max(mse_w + l1_w + stft_w, 1e-8)
-    mse_w, l1_w, stft_w = mse_w / total, l1_w / total, stft_w / total
+    total = max(mse_w + l1_w + stft_w + mel_w + a_w, 1e-8)
+    mse_w /= total
+    l1_w /= total
+    stft_w /= total
+    mel_w /= total
+    a_w /= total
+
+    frame_length = max(16, min(512, int(clip_len)))
+    frame_step = max(1, frame_length // 4)
+    num_spectrogram_bins = frame_length // 2 + 1
+
+    a_weight_tensor = None
+    if a_w > 0.0:
+        a_weight_tensor = compute_a_weighting_vector(num_spectrogram_bins, sample_rate)
+
+    mel_matrix = None
+    if mel_w > 0.0:
+        mel_matrix = tf.signal.linear_to_mel_weight_matrix(
+            num_mel_bins=int(num_mel_bins),
+            num_spectrogram_bins=int(num_spectrogram_bins),
+            sample_rate=float(sample_rate),
+            lower_edge_hertz=20.0,
+            upper_edge_hertz=float(sample_rate) / 2.0,
+        )
+
+    need_stft = (stft_w > 0.0 or a_w > 0.0 or mel_w > 0.0)
 
     def _loss(y_true, y_pred):
         err = y_true - y_pred
@@ -437,11 +522,42 @@ def make_audio_loss(mse_weight, l1_weight, stft_weight, hard_weight=1.5, stft_po
         # Non-linear scaling factor penalizes larger time-domain mismatch residuals
         per_sample_weight = 1.0 + hard_w * abs_err
 
-        mse = tf.reduce_mean(tf.square(err) * per_sample_weight)
-        l1 = tf.reduce_mean(abs_err * per_sample_weight)
-        mag = stft_mag_loss(y_true, y_pred, power=stft_p)
+        loss = 0.0
+        if mse_w > 0.0:
+            mse = tf.reduce_mean(tf.square(err) * per_sample_weight)
+            loss = loss + mse_w * mse
 
-        return mse_w * mse + l1_w * l1 + stft_w * mag
+        if l1_w > 0.0:
+            l1 = tf.reduce_mean(abs_err * per_sample_weight)
+            loss = loss + l1_w * l1
+
+        if need_stft:
+            y_t = tf.squeeze(y_true, axis=-1)
+            y_p = tf.squeeze(y_pred, axis=-1)
+            stft_true = tf.signal.stft(y_t, frame_length=frame_length, frame_step=frame_step)
+            stft_pred = tf.signal.stft(y_p, frame_length=frame_length, frame_step=frame_step)
+            mag_true = tf.abs(stft_true)
+            mag_pred = tf.abs(stft_pred)
+            mag_delta = tf.abs(mag_true - mag_pred)
+
+            if stft_w > 0.0:
+                mag_loss = tf.reduce_mean(tf.pow(mag_delta + 1e-6, stft_p))
+                loss = loss + stft_w * mag_loss
+
+            if a_w > 0.0 and a_weight_tensor is not None:
+                a_weighted_delta = mag_delta * a_weight_tensor
+                a_loss = tf.reduce_mean(tf.pow(a_weighted_delta + 1e-6, stft_p))
+                loss = loss + a_w * a_loss
+
+            if mel_w > 0.0 and mel_matrix is not None:
+                mel_true = tf.tensordot(mag_true, mel_matrix, 1)
+                mel_pred = tf.tensordot(mag_pred, mel_matrix, 1)
+                log_mel_true = tf.math.log(tf.maximum(mel_true, 1e-5))
+                log_mel_pred = tf.math.log(tf.maximum(mel_pred, 1e-5))
+                mel_loss = tf.reduce_mean(tf.abs(log_mel_true - log_mel_pred))
+                loss = loss + mel_w * mel_loss
+
+        return loss
 
     return _loss
 
@@ -802,8 +918,109 @@ def plot_history(history, plot_path):
     plt.close(fig)
 
 
+def compute_audio_perceptual_metrics(model, test_data, sample_rate, num_samples=16):
+    """
+    Computes zero-dependency psychoacoustic and perceptual audio metrics (Milestone A3, Issue #36):
+    1. Log-Spectral Distance (LSD) in dB (standard frequency-domain distortion).
+    2. Psychoacoustic A-weighted Log-Spectral Distance (A-LSD) in dB.
+    3. STOI-style short-time sub-band envelope correlation proxy ([0.0, 1.0]).
+    """
+    lsd_list = []
+    a_lsd_list = []
+    stoi_list = []
+
+    samples_processed = 0
+    n_fft = 512
+    hop_length = 128
+    num_bins = n_fft // 2 + 1
+
+    # Precompute A-weighting normalization curve for LSD
+    freqs = np.linspace(0.0, float(sample_rate) / 2.0, num_bins, dtype=np.float32)
+    f_sq_safe = np.maximum(freqs ** 2, 1e-12)
+    c1, c2, c3, c4, c5 = 12194.0 ** 2, 20.6 ** 2, 107.7 ** 2, 737.9 ** 2, 12194.0 ** 2
+    num = c1 * (f_sq_safe ** 2)
+    den = (f_sq_safe + c2) * np.sqrt((f_sq_safe + c3) * (f_sq_safe + c4)) * (f_sq_safe + c5)
+    r_a = 1.2589 * (num / den)
+    r_a[freqs == 0.0] = 0.0
+    r_a_norm = r_a / max(float(np.mean(r_a)), 1e-6)
+
+    w = np.hanning(n_fft).astype(np.float32)
+
+    for x_batch, _ in test_data:
+        preds = model.predict(x_batch, verbose=0)
+        batch_size = x_batch.shape[0]
+
+        for i in range(batch_size):
+            y_true = x_batch[i, :, 0].numpy() if hasattr(x_batch[i, :, 0], "numpy") else np.asarray(x_batch[i, :, 0])
+            y_pred = preds[i, :, 0]
+            clip_len = min(len(y_true), len(y_pred))
+            if clip_len < n_fft:
+                continue
+
+            num_frames = (clip_len - n_fft) // hop_length + 1
+            if num_frames <= 0:
+                continue
+
+            frames_t = np.lib.stride_tricks.as_strided(
+                y_true, shape=(num_frames, n_fft), strides=(y_true.strides[0] * hop_length, y_true.strides[0])
+            )
+            frames_p = np.lib.stride_tricks.as_strided(
+                y_pred, shape=(num_frames, n_fft), strides=(y_pred.strides[0] * hop_length, y_pred.strides[0])
+            )
+
+            spec_t = np.fft.rfft(frames_t * w, axis=-1)
+            spec_p = np.fft.rfft(frames_p * w, axis=-1)
+            p_t = np.abs(spec_t) ** 2
+            p_p = np.abs(spec_p) ** 2
+
+            floor_t = max(float(np.max(p_t)) * 1e-8, 1e-12)
+            floor_p = max(float(np.max(p_p)) * 1e-8, 1e-12)
+            p_t_clamped = np.maximum(p_t, floor_t)
+            p_p_clamped = np.maximum(p_p, floor_p)
+
+            log_ratio = 10.0 * np.log10(p_t_clamped / p_p_clamped)
+            lsd_per_frame = np.sqrt(np.mean(log_ratio ** 2, axis=-1))
+            lsd_list.append(float(np.mean(lsd_per_frame)))
+
+            a_lsd_per_frame = np.sqrt(np.mean((log_ratio * r_a_norm) ** 2, axis=-1))
+            a_lsd_list.append(float(np.mean(a_lsd_per_frame)))
+
+            # STOI envelope correlation proxy across subbands
+            num_bands = 16
+            band_edges = np.unique(np.round(np.geomspace(1, num_bins - 1, num_bands + 1)).astype(int))
+            mag_t = np.abs(spec_t)
+            mag_p = np.abs(spec_p)
+            corrs = []
+            for b in range(len(band_edges) - 1):
+                k0, k1 = band_edges[b], max(band_edges[b] + 1, band_edges[b + 1])
+                env_t = np.linalg.norm(mag_t[:, k0:k1], axis=-1)
+                env_p = np.linalg.norm(mag_p[:, k0:k1], axis=-1)
+                dev_t = env_t - np.mean(env_t)
+                dev_p = env_p - np.mean(env_p)
+                n_t = np.linalg.norm(dev_t)
+                n_p = np.linalg.norm(dev_p)
+                if n_t > 1e-8 and n_p > 1e-8:
+                    r = np.dot(dev_t, dev_p) / (n_t * n_p)
+                    corrs.append(float(np.clip(r, 0.0, 1.0)))
+            if corrs:
+                stoi_list.append(float(np.mean(corrs)))
+
+            samples_processed += 1
+            if samples_processed >= num_samples:
+                break
+        if samples_processed >= num_samples:
+            break
+
+    return {
+        "lsd_db": float(np.mean(lsd_list)) if lsd_list else 0.0,
+        "a_weighted_lsd_db": float(np.mean(a_lsd_list)) if a_lsd_list else 0.0,
+        "envelope_correlation_stoi_proxy": float(np.mean(stoi_list)) if stoi_list else 1.0,
+        "sample_count": int(samples_processed),
+        "pesq_stoi_note": "Zero-dependency pure-Python perceptual evaluation (Log-Spectral Distance and STOI subband envelope proxy). Standard ITU-T P.862 PESQ requires external compiled C libraries and can be evaluated post-hoc.",
+    }
+
 def save_report(args, history, eval_values, run_dir, preview_plot, preview_wav, benchmark_path, metrics_plot,
-                compression_estimate):
+                compression_estimate, perceptual_metrics=None):
     payload = {
         "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "config": vars(args),
@@ -817,7 +1034,13 @@ def save_report(args, history, eval_values, run_dir, preview_plot, preview_wav, 
         "actual_latent_bytes_per_clip": compression_estimate.get("actual_latent_bytes_per_clip"),
         "actual_compression_ratio": compression_estimate.get("actual_compression_ratio"),
         "estimated_input_to_latent_ratio": compression_estimate.get("estimated_input_to_latent_ratio"),
+        "loss_profile": getattr(args, "loss_profile", "balanced"),
     }
+    if perceptual_metrics:
+        payload["perceptual_metrics"] = perceptual_metrics
+        payload["test_metrics"]["lsd_db"] = perceptual_metrics["lsd_db"]
+        payload["test_metrics"]["a_weighted_lsd_db"] = perceptual_metrics["a_weighted_lsd_db"]
+        payload["test_metrics"]["envelope_correlation_stoi_proxy"] = perceptual_metrics["envelope_correlation_stoi_proxy"]
     report_path = os.path.join(run_dir, "audio_evaluation_report.md")
     write_markdown_json_report(payload, report_path, title="Audio Evaluation Report")
     return report_path
@@ -836,6 +1059,7 @@ def main():
             print(f"[*] Applied {len(override_result.applied)} params from {args.params_file}")
         if override_result.unknown:
             print(f"[!] Ignored unknown params in file: {sorted(override_result.unknown)}")
+        args = resolve_loss_profile(args)
 
     args.model_base_filters = max(16, int(args.model_base_filters))
     args.model_kernel_size = max(1, int(args.model_kernel_size))
@@ -873,8 +1097,13 @@ def main():
         args.loss_mse_weight,
         args.loss_l1_weight,
         args.loss_stft_weight,
+        mel_weight=args.loss_mel_weight,
+        a_weight=args.loss_a_weight,
         hard_weight=args.loss_hard_weight,
         stft_power=args.loss_stft_power,
+        sample_rate=args.sample_rate,
+        clip_len=clip_len,
+        num_mel_bins=args.mel_bins,
     )
     model.compile(
         optimizer=tf.keras.optimizers.Adam(learning_rate=args.lr),
@@ -932,8 +1161,16 @@ def main():
         args.latent_bits,
         latent_bit_depth=args.latent_bit_depth,
     )
+    perceptual_metrics = None
+    if args.eval_perceptual_metrics:
+        print("[*] Computing psychoacoustic and perceptual evaluation metrics...")
+        perceptual_metrics = compute_audio_perceptual_metrics(
+            model, test_data, args.sample_rate, num_samples=16
+        )
+        print(f"[+] Perceptual metrics: LSD={perceptual_metrics['lsd_db']:.2f} dB, A-LSD={perceptual_metrics['a_weighted_lsd_db']:.2f} dB, STOI proxy={perceptual_metrics['envelope_correlation_stoi_proxy']:.3f}")
+
     report_path = save_report(args, history, eval_values, run_dir, preview_plot, preview_wav, benchmark_path,
-                              metrics_plot, compression_estimate)
+                              metrics_plot, compression_estimate, perceptual_metrics=perceptual_metrics)
 
     print("\n[+] Audio training complete")
     print(f"[+] Weights: {weights_path}")
@@ -944,9 +1181,11 @@ def main():
     print(f"[+] Test PSNR: {float(eval_values.get('psnr_metric', float('nan'))):.3f}")
     print(f"[+] Test SNR(dB): {float(eval_values.get('snr_db_metric', float('nan'))):.3f}")
     print(f"[+] Target SNR(dB): {args.target_snr_db:.3f}")
+    print(f"[+] Loss profile: {args.loss_profile}")
     print(
-        f"[+] Loss weights (mse/l1/stft): "
-        f"{args.loss_mse_weight:.3f}/{args.loss_l1_weight:.3f}/{args.loss_stft_weight:.3f}"
+        f"[+] Loss weights (mse/l1/stft/mel/a_weight): "
+        f"{args.loss_mse_weight:.3f}/{args.loss_l1_weight:.3f}/{args.loss_stft_weight:.3f}/"
+        f"{args.loss_mel_weight:.3f}/{args.loss_a_weight:.3f}"
     )
     print(f"[+] Hard residual weight: {args.loss_hard_weight:.3f}")
     print(f"[+] STFT penalty power: {args.loss_stft_power:.3f}")
