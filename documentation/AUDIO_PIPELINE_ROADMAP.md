@@ -14,7 +14,7 @@ in `src/training/random_search_hyperparams.py` / `src/training/param_overrides.p
 | Data pipeline | `src/audio/prepare_audio_dataset.py` canonicalizes mp3/flac/ogg/m4a/aac/opus/wav → mono PCM16 WAV at a target sample rate with `none/peak/rms/rms_peak` normalization + JSON sidecar metadata. Trainer loads canonical WAVs, mono-downmixes, resamples via linear interpolation, pads/crops to a fixed `clip_len = sample_rate * clip_seconds`. |
 | Compression accounting | **Real & Theoretical (Milestone A1 Complete)**: Evaluation reports log both `estimated_input_to_latent_ratio` and measured `actual_latent_bytes_per_clip` / `actual_compression_ratio` computed via range coding and empirical Shannon entropy of the latent symbols. Gated behind `--latent-bit-depth` (default 0 / float32). |
 | Loss/metrics | Weighted MSE + L1 + STFT-magnitude loss with a "hard residual" upweighting term; tracks SNR (dB, primary) and PSNR. `TargetSNRCallback` stops early at `--target-snr-db` (default 90). |
-| Real-time path | `src/audio/realtime_audio_vortex_pipeline.py` is a **feature-extraction-only** pipeline (FFT band energies → visual "vortex" control signals for a demo). It does **not** run the trained autoencoder — there is no real-time/streaming inference path for the compression model itself. |
+| Real-time path | `src/audio/realtime_audio_compression_pipeline.py` provides a chunked Overlap-Add (OLA) streaming compression runtime using the trained autoencoder. `src/audio/realtime_audio_vortex_pipeline.py` is a **feature-extraction-only** pipeline (FFT band energies → visual "vortex" control signals for a demo) and does not run the autoencoder. |
 | Robustness | Mono-only (stereo is downmixed), fixed training sample rate (16 kHz) vs. fixed vortex demo rate (48 kHz), no noise augmentation, silent fallback-to-silence on WAV read failure. |
 | Search & docs | `src/training/random_search_hyperparams.py` samples latent_dim/latent_bit_depth/filters/kernel/batch/epochs/lr/clip_seconds for audio; ranks by `snr_db_metric`. `--params-file` JSON `audio` section documented in `documentation/MODEL_PARAMS_INPUT.md`. |
 
@@ -30,7 +30,7 @@ in `src/training/random_search_hyperparams.py` / `src/training/param_overrides.p
 
 - **G1 — Real compression accounting**: measure actual bits/sample, not a theoretical ratio. [Landed in A1]
 - **G2 — Close the QAT gap**: train the model to tolerate the quantization it will actually be deployed with. [Landed in A1]
-- **G3 — Real-time compression inference**: extend (or add alongside) the vortex pipeline a streaming path that actually runs the trained autoencoder in chunks.
+- **G3 — Real-time compression inference**: extend (or add alongside) the vortex pipeline a streaming path that actually runs the trained autoencoder in chunks. [Landed in A2]
 - **G4 — Perceptual quality**: move beyond waveform/STFT-magnitude loss toward psychoacoustically-informed objectives.
 - **G5 — Robustness & multi-channel/rate support**: stereo, variable sample rate, noisy real-world input.
 - **G6 — Discoverability**: docs, search space, and reports stay in sync as the above land.
@@ -48,16 +48,16 @@ Issues:
 3. **[audio/compression] Add real vs theoretical compression metrics to evaluation report (#27)** — log both `estimated_input_to_latent_ratio` (existing) and `actual_latent_bytes_per_clip` / `actual_compression_ratio` side by side. *(Completed)*
 4. **[audio/docs] Document real vs theoretical audio compression accounting (#28)** — update `README.md` / `documentation/MODEL_PARAMS_INPUT.md`. *(Completed)*
 
-### Milestone A2 — Real-Time Streaming Compression Path
+### Milestone A2 — Real-Time Streaming Compression Path (Completed)
 **Objective:** Give the trained autoencoder an actual streaming/chunked inference path, distinct from the existing vortex feature-extraction demo.
 **Why:** `src/audio/realtime_audio_vortex_pipeline.py` never invokes the trained model — there is currently no way to run the compressor in real time at all.
-**Exit criteria:** A new streaming inference module can take arbitrary-length PCM input, process it in `clip_len`-sized (or overlap-add) chunks through a loaded model, and reconstruct output with bounded latency, with a smoke test proving no crash on a short synthetic stream.
+**Exit criteria:** A new streaming inference module can take arbitrary-length PCM input, process it in `clip_len`-sized (or overlap-add) chunks through a loaded model, and reconstruct output with bounded latency, with a smoke test proving no crash on a short synthetic stream. *(Achieved)*
 
 Issues:
-1. **[audio/streaming] Design a chunked/overlap-add inference wrapper for the trained autoencoder (#29)** — reuse existing fixed `clip_len` constraint; document latency implications.
-2. **[audio/streaming] Add `realtime_audio_compression_pipeline.py` (#30)** — mirrors `src/audio/realtime_audio_vortex_pipeline.py`'s streaming buffer conventions but decodes/encodes through the trained model instead of extracting FFT features.
-3. **[audio/streaming] Add a smoke test for streaming inference (#31)** — `tests/smoke/smoke_test_realtime_audio_compression.py`, tiny model + short synthetic stream, asserts output shape/latency bounds.
-4. **[audio/docs] Document the real-time compression path and its relationship to the vortex demo (#32)** — clarify in README that the vortex pipeline is visualization-only.
+1. **[audio/streaming] Design a chunked/overlap-add inference wrapper for the trained autoencoder (#29)** — reuse existing fixed `clip_len` constraint; document latency implications. *(Completed)*
+2. **[audio/streaming] Add `realtime_audio_compression_pipeline.py` (#30)** — mirrors `src/audio/realtime_audio_vortex_pipeline.py`'s streaming buffer conventions but decodes/encodes through the trained model instead of extracting FFT features. *(Completed)*
+3. **[audio/streaming] Add a smoke test for streaming inference (#31)** — `tests/smoke/smoke_test_realtime_audio_compression.py`, tiny model + short synthetic stream, asserts output shape/latency bounds. *(Completed)*
+4. **[audio/docs] Document the real-time compression path and its relationship to the vortex demo (#32)** — clarify in README that the vortex pipeline is visualization-only. *(Completed)*
 
 ### Milestone A3 — Perceptual Quality & Psychoacoustic Loss
 **Objective:** Move the loss function beyond MSE/L1/STFT-magnitude toward perceptually-weighted objectives.
