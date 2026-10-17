@@ -29,9 +29,10 @@ MAJOR_RUN_FILES = [
     ("Audio", "audio_local_run/20260627_161410/audio_evaluation_report.md", "baseline"),
     ("Audio", "audio_real_run_v2/20260629_125927/audio_evaluation_report.md", "real_run_v2"),
     ("Audio", "audio_realdata_opt_smoke/20260629_145612/audio_evaluation_report.md", "realdata_opt_smoke"),
+    ("Audio", "highend_run/20261017_135058/audio/20261017_135103/audio_evaluation_report.md", "master_highend"),
     ("Video", "video_local_run_tuned_fast2/20260629_070559/video_evaluation_report.md", "tuned_fast2"),
     ("Video", "video_realdata_opt_smoke/20260629_145842/video_evaluation_report.md", "realdata_opt_smoke"),
-    ("Bundle", "production_bundle/best_20260629_142034/metadata.json", "production_bundle"),
+    ("Bundle", "production_bundle/best_20261017_135322/metadata.json", "production_bundle"),
 ]
 
 
@@ -95,37 +96,44 @@ def collect_major_runs() -> list[dict[str, Any]]:
 
 
 def collect_image_paths(root: Path) -> list[Path]:
-    exts = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
-    return sorted(p for p in root.rglob("*") if p.is_file() and p.suffix.lower() in exts)
+    exts = {".png", ".jpg", ".jpeg"}
+    out = []
+    for p in root.rglob("*"):
+        if p.is_file() and p.suffix.lower() in exts:
+            out.append(p)
+    return sorted(out)
 
 
-def psnr_np(a: np.ndarray, b: np.ndarray) -> float:
-    mse = float(np.mean((a - b) ** 2))
+def psnr_np(orig: np.ndarray, recon: np.ndarray) -> float:
+    mse = float(np.mean((orig - recon) ** 2))
     if mse <= 1e-12:
         return 99.0
-    return 20.0 * math.log10(1.0 / math.sqrt(mse))
+    return float(10.0 * math.log10(1.0 / mse))
 
 
-def ssim_np(a: np.ndarray, b: np.ndarray) -> float:
-    ta = tf.convert_to_tensor(a[None, ...], dtype=tf.float32)
-    tb = tf.convert_to_tensor(b[None, ...], dtype=tf.float32)
-    return float(tf.image.ssim(ta, tb, max_val=1.0).numpy()[0])
+def ssim_np(orig: np.ndarray, recon: np.ndarray) -> float:
+    t1 = tf.convert_to_tensor(orig[None, ...], dtype=tf.float32)
+    t2 = tf.convert_to_tensor(recon[None, ...], dtype=tf.float32)
+    val = tf.image.ssim(t1, t2, max_val=1.0)
+    return float(val.numpy()[0])
 
 
 def encode_decode(img: Image.Image, fmt_name: str, quality: int) -> tuple[np.ndarray, int]:
     import io
 
-    buff = io.BytesIO()
+    buf = io.BytesIO()
     if fmt_name == "JPEG":
-        img.save(buff, format="JPEG", quality=quality, optimize=True)
+        img.save(buf, format="JPEG", quality=quality)
     elif fmt_name == "WEBP":
-        img.save(buff, format="WEBP", quality=quality, method=6)
+        img.save(buf, format="WEBP", quality=quality)
     else:
         raise ValueError(fmt_name)
-    data = buff.getvalue()
-    recon = Image.open(io.BytesIO(data)).convert("RGB")
-    arr = np.asarray(recon).astype(np.float32) / 255.0
-    return arr, len(data)
+
+    size = buf.tell()
+    buf.seek(0)
+    recon_img = Image.open(buf).convert("RGB")
+    recon = np.asarray(recon_img).astype(np.float32) / 255.0
+    return recon, size
 
 
 def benchmark_lossy_images() -> list[dict[str, Any]]:
@@ -139,7 +147,7 @@ def benchmark_lossy_images() -> list[dict[str, Any]]:
     indices = rng.choice(len(paths), size=sample_n, replace=False)
     chosen = [paths[int(i)] for i in indices]
 
-    configs = [
+    configs = [\
         ("JPEG", 95),
         ("JPEG", 85),
         ("JPEG", 75),
@@ -269,17 +277,19 @@ def write_markdown(rows: list[dict[str, Any]], lossy: list[dict[str, Any]], audi
     lines.append("")
     lines.append("## Production Bundle Selection")
     lines.append("")
-    bundle = next((r for r in rows if r.get("modality") == "Bundle" and r.get("exists")), None)
-    if bundle:
-        b = bundle["bundle"]
-        lines.append(f"- Bundle: `{bundle['path']}`")
+
+    bundle_row = next((r for r in rows if r["modality"] == "Bundle" and r.get("exists")), None)
+    if bundle_row and "bundle" in bundle_row:
+        b = bundle_row["bundle"]
+        lines.append(f"- Bundle dir: `{b.get('bundle_dir', '-')}`")
         lines.append(f"- Strategy: `{b.get('selection_strategy', '-')}`")
-        models = b.get("models", {})
-        for k in ["image", "audio", "video"]:
-            mk = models.get(k, {})
-            lines.append(
-                f"- {k.title()}: source `{mk.get('source_run_dir', '-')}`, PSNR `{fmt(mk.get('psnr_metric'), 3)}`"
-            )
+        lines.append(f"- Created: `{b.get('created_at_utc', '-')}`")
+        lines.append("")
+        lines.append("| Modality | Best PSNR | Source Run Dir | Copied Files |")
+        lines.append("|---|---:|---|---|")
+        for mod, info in b.get("models", {}).items():
+            copied_str = ", ".join(f"`{x}`" for x in info.get("copied_files", []))
+            lines.append(f"| {mod} | {fmt(info.get('psnr_metric'), 3)} | `{info.get('source_run_dir')}` | {copied_str} |")
     else:
         lines.append("- No production bundle metadata found.")
 
@@ -318,7 +328,7 @@ def write_markdown(rows: list[dict[str, Any]], lossy: list[dict[str, Any]], audi
     lines.append("- Model PSNR/SSIM values above come from run reports and may use resized model input dimensions.")
     lines.append("- Audio MP3 benchmark in `audio_real_run_v2` is marked skipped due to ffmpeg unavailability at that run time.")
 
-    out_path.write_text("\n".join(lines), encoding="utf-8")
+    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def main() -> None:
@@ -338,4 +348,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
