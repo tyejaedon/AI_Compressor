@@ -118,6 +118,19 @@ def main() -> None:
         f"psnr_metric: {tm.get('psnr_metric', '-')}",
         f"{quality_name}: {quality_summary}",
     ]
+    act_ratio = payload.get("actual_compression_ratio")
+    est_ratio = payload.get("estimated_input_to_latent_ratio")
+    act_bytes = payload.get("actual_latent_bytes_per_clip")
+    if act_ratio is not None:
+        lines.append(f"actual_ratio: {float(act_ratio):.2f}x")
+    if est_ratio is not None:
+        lines.append(f"est_ratio: {float(est_ratio):.2f}x")
+    if act_bytes is not None:
+        lines.append(f"actual_bytes: {float(act_bytes):.1f} B/clip")
+    pm = payload.get("perceptual_metrics", {})
+    if pm:
+        lines.append(f"lsd_db: {float(pm.get('lsd_db', 0)):.2f} dB")
+        lines.append(f"stoi_proxy: {float(pm.get('envelope_correlation_stoi_proxy', 0)):.3f}")
     if not history:
         lines.append("history: missing")
     axes[1, 2].text(0.02, 0.98, "\n".join(lines), va="top", ha="left", fontsize=10)
