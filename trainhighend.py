@@ -117,22 +117,26 @@ HIGHEND_JOBS: list[dict[str, Any]] = [
     },
     {
         "name": "audio",
-        "description": "Continuous phase linear-bottleneck audio autoencoder",
+        "description": "Continuous phase linear-bottleneck audio autoencoder with 8-bit QAT quantization",
         "script": "src/training/train_autoencoder_audio_local.py",
         "report_file": "audio_evaluation_report.md",
         "flags": {
             "preset": "custom",
             "data_dir": "data/AudioData/ESC-50-master/audio",
-            "real_file_limit": 500,
-            "clip_seconds": 1.0,
-            "latent_dim": 192,
-            "model_base_filters": 48,
+            "real_file_limit": 300,
+            "clip_seconds": 0.5,
+            "latent_dim": 96,
+            "latent_bit_depth": 8,
+            "quant_noise_anneal": True,
+            "model_base_filters": 32,
             "model_kernel_size": 5,
             "batch_size": 16,
-            "epochs": 15,
+            "epochs": 16,
             "lr": 1.2e-4,
             "target_snr_db": 90.0,
             "disable_target_snr_stop": True,
+            "loss_profile": "balanced",
+            "eval_perceptual_metrics": True,
             "run_mp3_benchmark": True,
             "no_export_tflite": True,
         },
@@ -214,6 +218,14 @@ def extract_key_metrics(payload: dict[str, Any], job_name: str) -> dict[str, Any
         rate_stats = payload.get("latent_rate_stats", {})
         metrics["bpp"] = rate_stats.get("latent_bits_per_pixel")
         metrics["entropy_bytes"] = rate_stats.get("estimated_bitstream_bytes_per_image")
+    elif job_name == "audio":
+        metrics["actual_compression_ratio"] = payload.get("actual_compression_ratio")
+        metrics["estimated_ratio"] = payload.get("estimated_input_to_latent_ratio")
+        metrics["actual_bytes"] = payload.get("actual_latent_bytes_per_clip")
+        pm = payload.get("perceptual_metrics", {})
+        if pm:
+            metrics["lsd_db"] = pm.get("lsd_db")
+            metrics["stoi_proxy"] = pm.get("envelope_correlation_stoi_proxy")
     return metrics
 
 

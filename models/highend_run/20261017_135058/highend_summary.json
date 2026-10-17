@@ -1,0 +1,45 @@
+{
+  "timestamp": "2026-10-17T10:52:07.357577Z",
+  "total_duration_minutes": 1.15,
+  "jobs": [
+    {
+      "job": "audio",
+      "status": "ok",
+      "duration_seconds": 68.79,
+      "report_path": "/Users/tyejaedon/PycharmProjects/AI_Compressor/models/highend_run/20261017_135058/audio/20261017_135103/audio_evaluation_report.md",
+      "metrics": {
+        "psnr": 19.15479278564453,
+        "mse": 0.01666065864264965,
+        "loss": 0.34117189049720764,
+        "ssim": null,
+        "snr_db": -0.2129884511232376,
+        "actual_compression_ratio": 1204.7058823529412,
+        "estimated_ratio": 83.33333333333333,
+        "actual_bytes": 13.28125,
+        "lsd_db": 28.9075823255409,
+        "stoi_proxy": 0.090868103051821
+      },
+      "hyperparams": {
+        "preset": "custom",
+        "data_dir": "data/AudioData/ESC-50-master/audio",
+        "real_file_limit": 300,
+        "clip_seconds": 0.5,
+        "latent_dim": 96,
+        "latent_bit_depth": 8,
+        "quant_noise_anneal": true,
+        "model_base_filters": 32,
+        "model_kernel_size": 5,
+        "batch_size": 16,
+        "epochs": 16,
+        "lr": 0.00012,
+        "target_snr_db": 90.0,
+        "disable_target_snr_stop": true,
+        "loss_profile": "balanced",
+        "eval_perceptual_metrics": true,
+        "run_mp3_benchmark": true,
+        "no_export_tflite": true,
+        "output_root": "/Users/tyejaedon/PycharmProjects/AI_Compressor/models/highend_run/20261017_135058/audio"
+      }
+    }
+  ]
+}
