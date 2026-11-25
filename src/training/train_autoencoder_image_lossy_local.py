@@ -2,6 +2,7 @@
 """Local image autoencoder trainer optimized for lossy compression and smaller output files."""
 
 import argparse
+import io
 import math
 import os
 import subprocess
@@ -14,6 +15,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras import Model, callbacks, layers
+
+try:
+    from PIL import Image as _PILImage
+except ImportError:
+    _PILImage = None
 
 from param_overrides import apply_overrides, load_overrides
 
@@ -52,14 +58,14 @@ class StraightThroughQuantize(layers.Layer):
     def call(self, inputs, training=None):
         quantized = tf.round(inputs * self.levels) / self.levels
         ste = inputs + tf.stop_gradient(quantized - inputs)
-        if not self.quant_noise_anneal:
-            return ste
-        if not training:
+        if not self.quant_noise_anneal or not training:
             return ste
 
         step = 1.0 / self.levels
-        noise = tf.random.uniform(tf.shape(inputs), -0.5, 0.5, dtype=inputs.dtype) * step * self.noise_scale
-        return ste + noise
+        noise = tf.random.uniform(tf.shape(inputs), -0.5, 0.5, dtype=inputs.dtype) * step
+        soft_quant = tf.clip_by_value(inputs + noise, 0.0, 1.0)
+        alpha = tf.cast(self.noise_scale, inputs.dtype)
+        return alpha * soft_quant + (1.0 - alpha) * ste
 
     def get_config(self):
         config = super().get_config()
@@ -78,7 +84,8 @@ class QuantNoiseAnnealCallback(callbacks.Callback):
     def on_epoch_begin(self, epoch, logs=None):
         if self.layer.noise_scale is None:
             return
-        frac = max(0.0, 1.0 - (epoch / self.total_epochs))
+        denom = max(1, self.total_epochs - 1) if self.total_epochs > 1 else 1
+        frac = max(0.0, 1.0 - (epoch / denom))
         self.layer.noise_scale.assign(frac)
 
 
@@ -122,18 +129,20 @@ class EntropyRatePenalty(layers.Layer):
     def call(self, inputs):
         bin_centers = tf.linspace(0.0, 1.0, self.num_bins)
         bin_centers = tf.reshape(bin_centers, [1] * len(inputs.shape) + [self.num_bins])
-        values = tf.expand_dims(inputs, axis=-1)
+        values = tf.expand_dims(tf.clip_by_value(inputs, 0.0, 1.0), axis=-1)
         # Gaussian kernel soft-assignment to bins; normalized so each value contributes total mass 1.
         sq_dist = tf.square(values - bin_centers)
         weights_unnorm = tf.exp(-0.5 * sq_dist / (self.bandwidth ** 2))
         weights_norm = weights_unnorm / (tf.reduce_sum(weights_unnorm, axis=-1, keepdims=True) + 1e-12)
 
-        # Average occupancy per bin across all other axes -> empirical probability distribution.
-        reduce_axes = list(range(len(weights_norm.shape) - 1))
+        # Per-channel empirical probability distribution across batch + spatial axes (keeps channel axis -2).
+        rank = len(weights_norm.shape)
+        reduce_axes = list(range(max(1, rank - 2)))
         probs = tf.reduce_mean(weights_norm, axis=reduce_axes)
-        probs = probs / (tf.reduce_sum(probs) + 1e-12)
+        probs = probs / (tf.reduce_sum(probs, axis=-1, keepdims=True) + 1e-12)
 
-        entropy_bits = -tf.reduce_sum(probs * tf.math.log(probs + 1e-12) / tf.math.log(2.0))
+        per_channel_entropy = -tf.reduce_sum(probs * tf.math.log(probs + 1e-12) / tf.math.log(2.0), axis=-1)
+        entropy_bits = tf.reduce_mean(per_channel_entropy)
         self.add_loss(self.weight * entropy_bits)
         return inputs
 
@@ -226,7 +235,19 @@ def parse_args():
         help="Fade additive quantization noise from full strength to zero over training (QAT-style annealing), "
         "default off preserves prior straight-through-only behavior",
     )
-    parser.set_defaults(export_tflite=True, run_baseline_benchmark=True)
+    parser.add_argument(
+        "--downsample-stages",
+        type=int,
+        default=3,
+        choices=[2, 3, 4],
+        help="Number of stride-2 spatial downsampling stages (2=4x, 3=8x, 4=16x per side)",
+    )
+    parser.add_argument("--grad-clipnorm", type=float, default=1.0, help="Gradient clip norm for Adam optimizer")
+    parser.add_argument("--real-augment", dest="real_augment", action="store_true", help="Enable random flips/crops on real training images")
+    parser.add_argument("--no-real-augment", dest="real_augment", action="store_false", help="Disable real-image augmentation")
+    parser.add_argument("--compact-arch", dest="compact_arch", action="store_true", help="Use SeparableConv2D + UpSampling2D for compact, artifact-free model")
+    parser.add_argument("--no-compact-arch", dest="compact_arch", action="store_false", help="Use standard Conv2D/Conv2DTranspose blocks")
+    parser.set_defaults(export_tflite=True, run_baseline_benchmark=True, real_augment=True, compact_arch=True)
     return parser.parse_args()
 
 
@@ -290,17 +311,53 @@ def split_indices(n, val_ratio, test_ratio, rng):
     return train_idx, val_idx, test_idx
 
 
-def make_dataset_from_paths(paths, block_size, batch_size, seed, shuffle):
+def filter_readable_image_paths(paths):
+    """Skip corrupt or unreadable image files before dataset creation."""
+    kept = []
+    skipped = 0
+    for path in paths:
+        try:
+            image_bytes = tf.io.read_file(path)
+            _ = tf.io.decode_image(image_bytes, channels=3, expand_animations=False)
+            kept.append(str(path))
+        except Exception:
+            skipped += 1
+    if skipped > 0:
+        print(f"[!] Skipped {skipped} corrupt/unreadable image(s)")
+    return np.array(kept, dtype=np.str_)
+
+
+def make_dataset_from_paths(paths, block_size, batch_size, seed, shuffle, augment=False):
+    block = int(block_size)
+
     def _decode(path):
         image_bytes = tf.io.read_file(path)
         image = tf.io.decode_image(image_bytes, channels=3, expand_animations=False)
-        image = tf.image.resize(image, [block_size, block_size], method=tf.image.ResizeMethod.AREA)
         image = tf.cast(image, tf.float32) / 255.0
-        return image, image
+        image.set_shape([None, None, 3])
+        shape = tf.shape(image)
+        h, w = shape[0], shape[1]
+
+        def _crop_patch():
+            if augment:
+                return tf.image.random_crop(image, [block, block, 3])
+            off_h = (h - block) // 2
+            off_w = (w - block) // 2
+            return tf.image.crop_to_bounding_box(image, off_h, off_w, block, block)
+
+        def _resize_patch():
+            return tf.image.resize(image, [block, block], method=tf.image.ResizeMethod.AREA)
+
+        patch = tf.cond(tf.logical_and(h >= block, w >= block), _crop_patch, _resize_patch)
+        if augment:
+            patch = tf.image.random_flip_left_right(patch)
+            patch = tf.image.random_flip_up_down(patch)
+        patch = tf.clip_by_value(patch, 0.0, 1.0)
+        return patch, patch
 
     ds = tf.data.Dataset.from_tensor_slices(paths)
     if shuffle:
-        ds = ds.shuffle(buffer_size=len(paths), seed=seed, reshuffle_each_iteration=True)
+        ds = ds.shuffle(buffer_size=max(1, len(paths)), seed=seed, reshuffle_each_iteration=True)
     ds = ds.map(_decode, num_parallel_calls=tf.data.AUTOTUNE)
     return ds.batch(batch_size).prefetch(tf.data.AUTOTUNE)
 
@@ -328,13 +385,17 @@ def build_explicit_split_datasets(args):
         val_paths = val_paths[: args.split_file_limit]
         test_paths = test_paths[: args.split_file_limit]
 
+    train_paths = filter_readable_image_paths(train_paths)
+    val_paths = filter_readable_image_paths(val_paths)
+    test_paths = filter_readable_image_paths(test_paths)
+
     if min(len(train_paths), len(val_paths), len(test_paths)) <= 0:
         raise ValueError("Explicit split directories must each contain at least one supported image file")
 
     return (
-        make_dataset_from_paths(train_paths, args.block_size, args.batch_size, args.seed, True),
-        make_dataset_from_paths(val_paths, args.block_size, args.batch_size, args.seed, False),
-        make_dataset_from_paths(test_paths, args.block_size, args.batch_size, args.seed, False),
+        make_dataset_from_paths(train_paths, args.block_size, args.batch_size, args.seed, True, augment=args.real_augment),
+        make_dataset_from_paths(val_paths, args.block_size, args.batch_size, args.seed, False, augment=False),
+        make_dataset_from_paths(test_paths, args.block_size, args.batch_size, args.seed, False, augment=False),
         {
             "source": "explicit_directories",
             "train": int(len(train_paths)),
@@ -384,6 +445,7 @@ def build_datasets(args):
     image_paths = collect_image_paths(args.data_dir)
     if args.real_file_limit > 0:
         image_paths = image_paths[: args.real_file_limit]
+    image_paths = filter_readable_image_paths(image_paths)
 
     if args.real_only and len(image_paths) < args.min_real_images:
         raise ValueError(
@@ -397,9 +459,9 @@ def build_datasets(args):
                 "--real-only split is too small after train/val/test partitioning; increase dataset size or adjust split ratios."
             )
         return (
-            make_dataset_from_paths(image_paths[train_idx], args.block_size, args.batch_size, args.seed, True),
-            make_dataset_from_paths(image_paths[val_idx], args.block_size, args.batch_size, args.seed, False),
-            make_dataset_from_paths(image_paths[test_idx], args.block_size, args.batch_size, args.seed, False),
+            make_dataset_from_paths(image_paths[train_idx], args.block_size, args.batch_size, args.seed, True, augment=args.real_augment),
+            make_dataset_from_paths(image_paths[val_idx], args.block_size, args.batch_size, args.seed, False, augment=False),
+            make_dataset_from_paths(image_paths[test_idx], args.block_size, args.batch_size, args.seed, False, augment=False),
             {
                 "source": "filesystem",
                 "train": int(len(train_idx)),
@@ -433,6 +495,15 @@ def ssim_metric(y_true, y_pred):
     return tf.reduce_mean(tf.image.ssim(y_true, y_pred, max_val=1.0))
 
 
+def _residual_block(x, filters, kernel_size, compact=True):
+    conv_cls = layers.SeparableConv2D if compact else layers.Conv2D
+    h = conv_cls(filters, kernel_size, padding="same")(x)
+    h = layers.LeakyReLU(negative_slope=0.1)(h)
+    h = conv_cls(filters, kernel_size, padding="same")(h)
+    shortcut = x if x.shape[-1] == filters else layers.Conv2D(filters, 1, padding="same")(x)
+    return layers.LeakyReLU(negative_slope=0.1)(layers.Add()([shortcut, h]))
+
+
 def build_autoencoder(
     latent_dim,
     rate_lambda,
@@ -441,18 +512,25 @@ def build_autoencoder(
     rate_loss_mode="magnitude",
     latent_bit_depth=8,
     quant_noise_anneal=False,
+    downsample_stages=3,
+    compact_arch=True,
 ):
     inputs = layers.Input(shape=(None, None, 3))
     base_filters = max(16, int(model_base_filters))
     kernel_size = max(1, int(model_kernel_size))
+    stages = max(2, min(4, int(downsample_stages)))
     mid_filters = max(base_filters + base_filters // 2, base_filters + 8)
     deep_filters = max(base_filters * 2, base_filters + 16)
-    tail_filters = max(16, base_filters // 2)
+    stage_filters = [base_filters, mid_filters, deep_filters, deep_filters][:stages]
+    inner_conv = layers.SeparableConv2D if compact_arch else layers.Conv2D
 
-    x = layers.Conv2D(base_filters, kernel_size, strides=2, padding="same", activation="relu")(inputs)
-    x = layers.Conv2D(mid_filters, kernel_size, padding="same", activation="relu")(x)
-    x = layers.Conv2D(deep_filters, kernel_size, strides=2, padding="same", activation="relu")(x)
-    x = layers.Conv2D(deep_filters, kernel_size, padding="same", activation="relu")(x)
+    # Encoder with configurable stride-2 stages (default 3 -> 8x spatial, 64x area reduction)
+    x = inputs
+    for idx, f in enumerate(stage_filters):
+        conv_cls = layers.Conv2D if idx == 0 else inner_conv
+        x = conv_cls(f, kernel_size, strides=2, padding="same")(x)
+        x = layers.LeakyReLU(negative_slope=0.1)(x)
+        x = _residual_block(x, f, kernel_size, compact=compact_arch)
 
     latent_pre = layers.Conv2D(latent_dim, 1, padding="same", activation="sigmoid", name="bottleneck_pre_quant")(x)
     latent_quant = StraightThroughQuantize(
@@ -465,14 +543,21 @@ def build_autoencoder(
     else:
         latent_penalized = RatePenalty(rate_lambda, name="rate_penalty")(latent_quant)
 
-    x = layers.Conv2D(deep_filters, kernel_size, padding="same", activation="relu")(latent_penalized)
-    x = layers.Conv2DTranspose(mid_filters, kernel_size, strides=2, padding="same", activation="relu")(x)
-    x = layers.Conv2D(base_filters, kernel_size, padding="same", activation="relu")(x)
-    x = layers.Conv2DTranspose(tail_filters, kernel_size, strides=2, padding="same", activation="relu")(x)
+    # Decoder: UpSampling2D + SeparableConv2D avoids Conv2DTranspose checkerboard artifacts
+    x = layers.Conv2D(stage_filters[-1], 1, padding="same")(latent_penalized)
+    x = layers.LeakyReLU(negative_slope=0.1)(x)
+    for f in reversed(stage_filters):
+        if compact_arch:
+            x = layers.UpSampling2D(size=2, interpolation="bilinear")(x)
+            x = layers.SeparableConv2D(f, kernel_size, padding="same")(x)
+        else:
+            x = layers.Conv2DTranspose(f, kernel_size, strides=2, padding="same")(x)
+        x = layers.LeakyReLU(negative_slope=0.1)(x)
+        x = _residual_block(x, f, kernel_size, compact=compact_arch)
+
     outputs = layers.Conv2D(3, kernel_size, padding="same", activation="sigmoid")(x)
 
     model = Model(inputs, outputs, name="image_lossy_autoencoder")
-
     return model
 
 
@@ -621,12 +706,80 @@ class _StaticRangeEncoder:
         return bytes(out)
 
 
-def range_encode_latent_symbols(latent_batch, num_images, bit_depth=8):
-    """Actually range-encode `num_images` worth of quantized latent symbols.
+def _collect_samples_from_dataset(dataset, sample_count):
+    """Collect up to `sample_count` images across multiple batches (avoids take(1) truncation)."""
+    target = max(1, int(sample_count))
+    chunks = []
+    seen = 0
+    for batch_images, _ in dataset:
+        n = int(batch_images.shape[0])
+        if n <= 0:
+            continue
+        take_n = min(target - seen, n)
+        chunks.append(batch_images[:take_n])
+        seen += take_n
+        if seen >= target:
+            break
+    if not chunks:
+        return None
+    return tf.concat(chunks, axis=0)
 
-    Returns the real compressed byte size (payload only, static per-sample
-    histogram not counted) so it can be compared against the entropy estimate.
-    """
+
+class _StaticRangeDecoder:
+    """Matching 32-bit static-frequency range decoder to verify exact lossless latent round-trip."""
+
+    TOP = 1 << 24
+    BOTTOM = 1 << 16
+
+    def __init__(self, freqs):
+        self.total = int(sum(freqs))
+        cum = 0
+        self.cum_freqs = []
+        self.freqs = []
+        for f in freqs:
+            self.cum_freqs.append(cum)
+            self.freqs.append(int(f))
+            cum += int(f)
+        self.cum_freqs.append(cum)
+
+    def decode(self, data, count):
+        low = 0
+        rng = 0xFFFFFFFF
+        code = 0
+        idx = 0
+        data_len = len(data)
+        for _ in range(4):
+            code = ((code << 8) | (data[idx] if idx < data_len else 0)) & 0xFFFFFFFF
+            idx += 1
+
+        out = []
+        import bisect
+        for _ in range(count):
+            rng //= self.total
+            offset = (code - low) & 0xFFFFFFFF
+            target = min(self.total - 1, offset // max(1, rng))
+            sym = bisect.bisect_right(self.cum_freqs, target) - 1
+            out.append(sym)
+            cf = self.cum_freqs[sym]
+            f = self.freqs[sym]
+            low = (low + cf * rng) & 0xFFFFFFFF
+            rng *= f
+            while True:
+                if (low ^ (low + rng)) < self.TOP:
+                    pass
+                elif rng < self.BOTTOM:
+                    rng = (-low) & (self.BOTTOM - 1)
+                else:
+                    break
+                code = ((code << 8) | (data[idx] if idx < data_len else 0)) & 0xFFFFFFFF
+                idx += 1
+                low = (low << 8) & 0xFFFFFFFF
+                rng = (rng << 8) & 0xFFFFFFFF
+        return out
+
+
+def range_encode_latent_symbols(latent_batch, num_images, bit_depth=8):
+    """Actually range-encode `num_images` worth of quantized latent symbols and verify lossless decode."""
     num_levels = (1 << int(bit_depth))
     max_level = num_levels - 1
     levels = np.clip(np.round(np.asarray(latent_batch) * max_level), 0, max_level).astype(np.int64)
@@ -641,8 +794,17 @@ def range_encode_latent_symbols(latent_batch, num_images, bit_depth=8):
     freqs = np.maximum(counts, 1)
 
     encoder = _StaticRangeEncoder(freqs)
-    encoded = encoder.encode(flat.tolist())
+    flat_list = flat.tolist()
+    encoded = encoder.encode(flat_list)
 
+    # Verify lossless decode on the first 512 symbols (or full stream if smaller)
+    verify_n = min(512, len(flat_list))
+    decoder = _StaticRangeDecoder(freqs)
+    decoded_prefix = decoder.decode(encoded, verify_n)
+    roundtrip_verified = decoded_prefix == flat_list[:verify_n]
+
+    # Account for compact 2-byte-per-level frequency table header
+    header_bytes = num_levels * 2
     symbols_per_image = int(np.prod(sample.shape[1:]))
     total_symbols = int(flat.shape[0])
     entropy_bits_per_symbol = float(
@@ -655,12 +817,11 @@ def range_encode_latent_symbols(latent_batch, num_images, bit_depth=8):
         "symbols_per_image": symbols_per_image,
         "total_symbols_encoded": total_symbols,
         "actual_compressed_bytes": len(encoded),
+        "header_bytes": header_bytes,
         "actual_compressed_bytes_per_image": len(encoded) / n,
+        "actual_total_bytes_per_image_with_header": (len(encoded) + header_bytes) / n,
         "entropy_estimate_bytes_per_image": (entropy_bits_per_symbol * symbols_per_image) / 8.0,
-        "note": (
-            "Static per-sample frequency table is not itself transmitted/counted; "
-            "a deployed coder would need an agreed-upon or separately-coded entropy model."
-        ),
+        "roundtrip_verified": bool(roundtrip_verified),
     }
 
 
@@ -674,34 +835,39 @@ class TargetCompressionRatioCallback(callbacks.Callback):
 
     def on_epoch_end(self, epoch, logs=None):
         del logs
-        for images, _ in self.dataset.take(1):
-            images = images[: self.sample_count]
-            if int(images.shape[0]) == 0:
-                return
-            preds = self.model.predict(images, verbose=0)
-            size_stats = compute_batch_lossy_size_stats(images, preds, self.jpeg_quality)
-            ratio = float(size_stats["recon_jpeg_vs_orig_jpeg_ratio"])
-            print(f"\n[+] Epoch {epoch + 1} JPEG size ratio (recon/orig): {ratio:.3f}")
-            if ratio <= self.target_ratio:
-                print(
-                    f"[+] Target compression ratio reached at epoch {epoch + 1}: "
-                    f"{ratio:.3f} <= {self.target_ratio:.3f}"
-                )
-                self.model.stop_training = True
+        images = _collect_samples_from_dataset(self.dataset, self.sample_count)
+        if images is None or int(images.shape[0]) == 0:
             return
+        preds = self.model.predict(images, verbose=0)
+        size_stats = compute_batch_lossy_size_stats(images, preds, self.jpeg_quality)
+        ratio = float(size_stats["recon_jpeg_vs_orig_jpeg_ratio"])
+        print(f"\n[+] Epoch {epoch + 1} JPEG size ratio (recon/orig): {ratio:.3f}")
+        if ratio <= self.target_ratio:
+            print(
+                f"[+] Target compression ratio reached at epoch {epoch + 1}: "
+                f"{ratio:.3f} <= {self.target_ratio:.3f}"
+            )
+            self.model.stop_training = True
 
 
 def _encode_decode_codec(image_u8, codec, quality):
     if codec == "jpeg":
         encoded = tf.io.encode_jpeg(image_u8, quality=int(quality), optimize_size=True)
         decoded = tf.io.decode_jpeg(encoded, channels=3)
-        return encoded, decoded
+        return int(tf.strings.length(encoded).numpy()), decoded
     if codec == "webp":
-        if not hasattr(tf.io, "encode_webp") or not hasattr(tf.io, "decode_webp"):
-            return None, None
-        encoded = tf.io.encode_webp(image_u8, quality=float(quality))
-        decoded = tf.io.decode_webp(encoded)
-        return encoded, decoded
+        if hasattr(tf.io, "encode_webp") and hasattr(tf.io, "decode_webp"):
+            encoded = tf.io.encode_webp(image_u8, quality=float(quality))
+            decoded = tf.io.decode_webp(encoded)
+            return int(tf.strings.length(encoded).numpy()), decoded
+        if _PILImage is not None:
+            buf = io.BytesIO()
+            _PILImage.fromarray(image_u8.numpy()).save(buf, format="WEBP", quality=int(quality))
+            raw = buf.getvalue()
+            buf.seek(0)
+            dec_np = np.asarray(_PILImage.open(buf).convert("RGB"), dtype=np.uint8)
+            return len(raw), tf.convert_to_tensor(dec_np, dtype=tf.uint8)
+        return None, None
     raise ValueError(f"Unsupported codec: {codec}")
 
 
@@ -713,14 +879,14 @@ def _evaluate_codec_grid(images_u8, codec, target_psnr):
         sizes = []
         psnrs = []
         for i in range(int(images_u8.shape[0])):
-            encoded, decoded = _encode_decode_codec(images_u8[i], codec, q)
-            if encoded is None or decoded is None:
+            encoded_len, decoded = _encode_decode_codec(images_u8[i], codec, q)
+            if encoded_len is None or decoded is None:
                 return {
                     "codec": codec,
                     "available": False,
-                    "reason": "TensorFlow build does not expose tf.io.encode_webp/decode_webp",
+                    "reason": "Neither TensorFlow WebP nor Pillow WebP is available",
                 }
-            sizes.append(int(tf.strings.length(encoded).numpy()))
+            sizes.append(int(encoded_len))
             orig_f = tf.cast(images_u8[i], tf.float32) / 255.0
             dec_f = tf.cast(decoded, tf.float32) / 255.0
             psnrs.append(float(tf.image.psnr(orig_f, dec_f, max_val=1.0).numpy()))
@@ -748,42 +914,50 @@ def _evaluate_codec_grid(images_u8, codec, target_psnr):
     }
 
 
-def benchmark_baseline_codecs_at_matched_psnr(model, dataset, jpeg_quality, sample_count, model_size_stats):
-    for images, _ in dataset.take(1):
-        images = images[:sample_count]
-        if int(images.shape[0]) == 0:
-            return {"available": False, "reason": "No images available for benchmark"}
+def benchmark_baseline_codecs_at_matched_psnr(
+    model, dataset, jpeg_quality, sample_count, model_size_stats, latent_rate_stats=None
+):
+    images = _collect_samples_from_dataset(dataset, sample_count)
+    if images is None or int(images.shape[0]) == 0:
+        return {"available": False, "reason": "No images available for benchmark"}
 
-        preds = model.predict(images, verbose=0)
-        images_u8 = tf.cast(tf.round(tf.clip_by_value(images, 0.0, 1.0) * 255.0), tf.uint8)
+    images_u8 = tf.cast(tf.round(tf.clip_by_value(images, 0.0, 1.0) * 255.0), tf.uint8)
 
-        model_target_psnr = float(model_size_stats.get("avg_psnr", 0.0))
-        model_recon_jpeg_bytes = float(model_size_stats.get("mean_reconstructed_jpeg_bytes", 0.0))
+    model_target_psnr = float(model_size_stats.get("avg_psnr", 0.0))
+    model_recon_jpeg_bytes = float(model_size_stats.get("mean_reconstructed_jpeg_bytes", 0.0))
+    latent_bytes = (
+        float(latent_rate_stats.get("estimated_bitstream_bytes_per_image", 0.0))
+        if isinstance(latent_rate_stats, dict)
+        else None
+    )
 
-        jpeg_baseline = _evaluate_codec_grid(images_u8, "jpeg", model_target_psnr)
-        webp_baseline = _evaluate_codec_grid(images_u8, "webp", model_target_psnr)
+    jpeg_baseline = _evaluate_codec_grid(images_u8, "jpeg", model_target_psnr)
+    webp_baseline = _evaluate_codec_grid(images_u8, "webp", model_target_psnr)
 
-        benchmark = {
-            "available": True,
-            "sample_count": int(images.shape[0]),
-            "model_target_psnr": model_target_psnr,
-            "model_reconstructed_jpeg_bytes": model_recon_jpeg_bytes,
-            "model_export_jpeg_quality": int(jpeg_quality),
-            "jpeg_baseline": jpeg_baseline,
-            "webp_baseline": webp_baseline,
-        }
+    benchmark = {
+        "available": True,
+        "sample_count": int(images.shape[0]),
+        "model_target_psnr": model_target_psnr,
+        "model_reconstructed_jpeg_bytes": model_recon_jpeg_bytes,
+        "model_latent_estimated_bytes": latent_bytes,
+        "model_export_jpeg_quality": int(jpeg_quality),
+        "jpeg_baseline": jpeg_baseline,
+        "webp_baseline": webp_baseline,
+    }
 
-        if jpeg_baseline.get("available"):
-            jpeg_matched = float(jpeg_baseline["matched"]["mean_bytes"])
-            benchmark["model_vs_jpeg_matched_size_ratio"] = model_recon_jpeg_bytes / max(jpeg_matched, 1.0)
+    if jpeg_baseline.get("available"):
+        jpeg_matched = float(jpeg_baseline["matched"]["mean_bytes"])
+        benchmark["model_vs_jpeg_matched_size_ratio"] = model_recon_jpeg_bytes / max(jpeg_matched, 1.0)
+        if latent_bytes is not None:
+            benchmark["model_latent_vs_jpeg_matched_size_ratio"] = latent_bytes / max(jpeg_matched, 1.0)
 
-        if webp_baseline.get("available"):
-            webp_matched = float(webp_baseline["matched"]["mean_bytes"])
-            benchmark["model_vs_webp_matched_size_ratio"] = model_recon_jpeg_bytes / max(webp_matched, 1.0)
+    if webp_baseline.get("available"):
+        webp_matched = float(webp_baseline["matched"]["mean_bytes"])
+        benchmark["model_vs_webp_matched_size_ratio"] = model_recon_jpeg_bytes / max(webp_matched, 1.0)
+        if latent_bytes is not None:
+            benchmark["model_latent_vs_webp_matched_size_ratio"] = latent_bytes / max(webp_matched, 1.0)
 
-        return benchmark
-
-    return {"available": False, "reason": "No batches available in benchmark dataset"}
+    return benchmark
 
 
 def export_tflite_model(model, run_dir, use_fp16=False):
@@ -862,8 +1036,8 @@ def save_lossy_samples_and_stats(model, dataset, run_dir, jpeg_quality, sample_c
     sample_dir = os.path.join(run_dir, "lossy_samples")
     os.makedirs(sample_dir, exist_ok=True)
 
-    for images, _ in dataset.take(1):
-        images = images[:sample_count]
+    images = _collect_samples_from_dataset(dataset, sample_count)
+    if images is not None and int(images.shape[0]) > 0:
         preds = model.predict(images, verbose=0)
 
         size_stats = compute_batch_lossy_size_stats(images, preds, jpeg_quality)
@@ -989,9 +1163,14 @@ def main():
         rate_loss_mode=args.rate_loss_mode,
         latent_bit_depth=args.latent_bit_depth,
         quant_noise_anneal=args.quant_noise_anneal,
+        downsample_stages=args.downsample_stages,
+        compact_arch=args.compact_arch,
     )
+    opt_kwargs = {"learning_rate": args.lr}
+    if float(args.grad_clipnorm) > 0:
+        opt_kwargs["clipnorm"] = float(args.grad_clipnorm)
     model.compile(
-        optimizer=tf.keras.optimizers.Adam(learning_rate=args.lr),
+        optimizer=tf.keras.optimizers.Adam(**opt_kwargs),
         loss=reconstruction_loss,
         metrics=["mse", psnr_metric, ssim_metric],
     )
@@ -1039,6 +1218,20 @@ def main():
     plot_history(history, plot_path)
     preview_path = save_preview_reconstructions(model, test_data, run_dir)
     lossy_stats = save_lossy_samples_and_stats(model, test_data, run_dir, args.jpeg_quality, args.sample_count)
+    latent_rate_stats = None
+    entropy_coding = None
+    latent_model = get_latent_submodel(model)
+    eval_images = _collect_samples_from_dataset(test_data, args.sample_count)
+    if eval_images is not None and int(eval_images.shape[0]) > 0:
+        latent_batch = latent_model.predict(eval_images, verbose=0)
+        latent_rate_stats = compute_latent_entropy_stats(
+            latent_batch, image_pixel_count=args.block_size * args.block_size, bit_depth=args.latent_bit_depth
+        )
+        if args.enable_entropy_coding:
+            entropy_coding = range_encode_latent_symbols(
+                latent_batch, args.entropy_coding_samples, bit_depth=args.latent_bit_depth
+            )
+
     baseline_benchmark = None
     if args.run_baseline_benchmark:
         baseline_benchmark = benchmark_baseline_codecs_at_matched_psnr(
@@ -1047,19 +1240,8 @@ def main():
             jpeg_quality=args.jpeg_quality,
             sample_count=args.sample_count,
             model_size_stats=lossy_stats,
+            latent_rate_stats=latent_rate_stats,
         )
-
-    latent_rate_stats = None
-    entropy_coding = None
-    latent_model = get_latent_submodel(model)
-    for images, _ in test_data.take(1):
-        latent_batch = latent_model.predict(images, verbose=0)
-        latent_rate_stats = compute_latent_entropy_stats(
-            latent_batch, image_pixel_count=args.block_size * args.block_size, bit_depth=args.latent_bit_depth
-        )
-        if args.enable_entropy_coding:
-            entropy_coding = range_encode_latent_symbols(latent_batch, args.entropy_coding_samples, bit_depth=args.latent_bit_depth)
-        break
 
     report_path = save_report(
         args,

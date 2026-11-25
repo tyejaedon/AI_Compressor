@@ -234,6 +234,37 @@ def main() -> int:
     audio_dir = str((project_root / "data" / "AudioData" / "ESC-50-master" / "audio").resolve())
     video_dir = str((project_root / "data" / "VIDEO DATA").resolve())
 
+    has_cifar_dir = (project_root / "data" / "cifar10 2" / "train").exists()
+    if has_cifar_dir:
+        image_extra_args = [
+            "--train-dir",
+            cifar_train,
+            "--val-dir",
+            cifar_val,
+            "--test-dir",
+            cifar_test,
+            "--real-only",
+            "--no-export-tflite",
+        ]
+        image_train_fixed_args = {
+            "preset": "custom",
+            "train_dir": cifar_train,
+            "val_dir": cifar_val,
+            "test_dir": cifar_test,
+            "real_only": True,
+            "no_export_tflite": True,
+        }
+    else:
+        image_extra_args = [
+            "--use-cifar10",
+            "--no-export-tflite",
+        ]
+        image_train_fixed_args = {
+            "preset": "custom",
+            "use_cifar10": True,
+            "no_export_tflite": True,
+        }
+
     print(f"[+] Search root: {search_root}")
     print(f"[+] Train root: {train_root}")
     print(f"[+] Production dir: {production_dir}")
@@ -248,16 +279,7 @@ def main() -> int:
         "image_standard",
         trials=max(1, int(args.trials_image_standard)),
         minutes=max(1.0, float(args.minutes_image_standard)),
-        extra_args=[
-            "--train-dir",
-            cifar_train,
-            "--val-dir",
-            cifar_val,
-            "--test-dir",
-            cifar_test,
-            "--real-only",
-            "--no-export-tflite",
-        ],
+        extra_args=image_extra_args,
     )
 
     search_params["image_lossy"] = run_search_for_stage(
@@ -267,16 +289,7 @@ def main() -> int:
         "image_lossy",
         trials=max(1, int(args.trials_image_lossy)),
         minutes=max(1.0, float(args.minutes_image_lossy)),
-        extra_args=[
-            "--train-dir",
-            cifar_train,
-            "--val-dir",
-            cifar_val,
-            "--test-dir",
-            cifar_test,
-            "--real-only",
-            "--no-export-tflite",
-        ],
+        extra_args=image_extra_args,
     )
 
     search_params["audio"] = run_search_for_stage(
@@ -330,14 +343,7 @@ def main() -> int:
             "image_standard",
             "src/training/train_autoencoder_image_local.py",
             search_params["image_standard"],
-            {
-                "preset": "custom",
-                "train_dir": cifar_train,
-                "val_dir": cifar_val,
-                "test_dir": cifar_test,
-                "real_only": True,
-                "no_export_tflite": True,
-            },
+            image_train_fixed_args,
         )
     )
 
@@ -349,14 +355,7 @@ def main() -> int:
             "image_lossy",
             "src/training/train_autoencoder_image_lossy_local.py",
             search_params["image_lossy"],
-            {
-                "preset": "custom",
-                "train_dir": cifar_train,
-                "val_dir": cifar_val,
-                "test_dir": cifar_test,
-                "real_only": True,
-                "no_export_tflite": True,
-            },
+            image_train_fixed_args,
         )
     )
 

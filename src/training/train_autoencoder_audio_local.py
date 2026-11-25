@@ -85,8 +85,10 @@ class StraightThroughQuantize(layers.Layer):
             return ste
 
         step = 2.0 / self.levels
-        noise = tf.random.uniform(tf.shape(inputs), -0.5, 0.5, dtype=inputs.dtype) * step * self.noise_scale
-        return ste + noise
+        noise = tf.random.uniform(tf.shape(inputs), -0.5, 0.5, dtype=inputs.dtype) * step
+        soft_quant = tf.clip_by_value(inputs + noise, -1.0, 1.0)
+        alpha = tf.cast(self.noise_scale, inputs.dtype)
+        return alpha * soft_quant + (1.0 - alpha) * ste
 
     def get_config(self):
         config = super().get_config()
@@ -94,6 +96,34 @@ class StraightThroughQuantize(layers.Layer):
             "bit_depth": self.bit_depth,
             "quant_noise_anneal": self.quant_noise_anneal,
         })
+        return config
+
+
+@tf.keras.utils.register_keras_serializable(package="ai_compressor_audio")
+class SnakeActivation(layers.Layer):
+    """Learnable periodic activation x + (1/alpha) * sin^2(alpha * x) from BigVGAN / DAC
+    for preserving audio harmonics far better than ReLU."""
+
+    def __init__(self, alpha_init=1.0, **kwargs):
+        super().__init__(**kwargs)
+        self.alpha_init = float(alpha_init)
+
+    def build(self, input_shape):
+        channels = int(input_shape[-1])
+        self.alpha = self.add_weight(
+            name="snake_alpha",
+            shape=(1, 1, channels),
+            initializer=tf.keras.initializers.Constant(self.alpha_init),
+            trainable=True,
+        )
+
+    def call(self, inputs):
+        a = tf.maximum(tf.abs(self.alpha), 1e-4)
+        return inputs + tf.square(tf.sin(a * inputs)) / a
+
+    def get_config(self):
+        config = super().get_config()
+        config.update({"alpha_init": self.alpha_init})
         return config
 
 
@@ -108,7 +138,8 @@ class QuantNoiseAnnealCallback(callbacks.Callback):
     def on_epoch_begin(self, epoch, logs=None):
         if getattr(self.layer, "noise_scale", None) is None:
             return
-        frac = max(0.0, 1.0 - (epoch / self.total_epochs))
+        denom = max(1, self.total_epochs - 1) if self.total_epochs > 1 else 1
+        frac = max(0.0, 1.0 - (epoch / denom))
         self.layer.noise_scale.assign(frac)
 
 
@@ -166,7 +197,9 @@ def parse_args():
                         choices=["m1-air-fast", "m1-air-balanced", "m1-air-quality", "custom"])
     parser.add_argument("--sample-rate", type=int, default=16000, help="Audio sample rate")
     parser.add_argument("--clip-seconds", type=float, default=1.0, help="Audio clip duration in seconds")
-    parser.add_argument("--latent-dim", type=int, default=192, help="Latent bottleneck size")
+    parser.add_argument("--latent-dim", type=int, default=192, help="Legacy latent budget used to size bottleneck channels when --latent-channels=0")
+    parser.add_argument("--latent-channels", type=int, default=0, help="Explicit convolutional bottleneck channels (0 = auto from --latent-dim)")
+    parser.add_argument("--grad-clipnorm", type=float, default=1.0, help="Gradient clip norm for Adam optimizer")
     parser.add_argument("--model-base-filters", type=int, default=48,
                         help="Base Conv1D filter count for audio encoder/decoder")
     parser.add_argument("--model-kernel-size", type=int, default=5, help="Kernel size for core Conv1D blocks")
@@ -634,6 +667,10 @@ def make_audio_loss(
         )
 
     need_stft = (stft_w > 0.0 or a_w > 0.0 or mel_w > 0.0)
+    # Multi-resolution STFT FFT sizes for capturing both sharp transients and fine pitch harmonics
+    mr_fft_sizes = [n for n in (256, 512, 1024) if n <= int(clip_len)]
+    if not mr_fft_sizes:
+        mr_fft_sizes = [frame_length]
 
     def _loss(y_true, y_pred):
         err = y_true - y_pred
@@ -655,28 +692,38 @@ def make_audio_loss(
             clip_len_t = tf.shape(y_true)[1]
             y_t = tf.reshape(tf.transpose(y_true, [0, 2, 1]), [-1, clip_len_t])
             y_p = tf.reshape(tf.transpose(y_pred, [0, 2, 1]), [-1, clip_len_t])
-            stft_true = tf.signal.stft(y_t, frame_length=frame_length, frame_step=frame_step)
-            stft_pred = tf.signal.stft(y_p, frame_length=frame_length, frame_step=frame_step)
-            mag_true = tf.abs(stft_true)
-            mag_pred = tf.abs(stft_pred)
-            mag_delta = tf.abs(mag_true - mag_pred)
 
             if stft_w > 0.0:
-                mag_loss = tf.reduce_mean(tf.pow(mag_delta + 1e-6, stft_p))
-                loss = loss + stft_w * mag_loss
+                mr_total = 0.0
+                for n_fft in mr_fft_sizes:
+                    hop = max(1, n_fft // 4)
+                    mt = tf.abs(tf.signal.stft(y_t, frame_length=n_fft, frame_step=hop))
+                    mp = tf.abs(tf.signal.stft(y_p, frame_length=n_fft, frame_step=hop))
+                    # Spectral convergence + log-magnitude L1 (EnCodec / DAC / HiFi-GAN standard)
+                    sc = tf.norm(mt - mp, ord="fro", axis=[-2, -1]) / (tf.norm(mt, ord="fro", axis=[-2, -1]) + 1e-6)
+                    log_l1 = tf.reduce_mean(tf.abs(tf.math.log(mt + 1e-5) - tf.math.log(mp + 1e-5)))
+                    mr_total = mr_total + tf.reduce_mean(sc) + log_l1
+                loss = loss + stft_w * (mr_total / float(len(mr_fft_sizes)))
 
-            if a_w > 0.0 and a_weight_tensor is not None:
-                a_weighted_delta = mag_delta * a_weight_tensor
-                a_loss = tf.reduce_mean(tf.pow(a_weighted_delta + 1e-6, stft_p))
-                loss = loss + a_w * a_loss
+            if a_w > 0.0 or mel_w > 0.0:
+                stft_true = tf.signal.stft(y_t, frame_length=frame_length, frame_step=frame_step)
+                stft_pred = tf.signal.stft(y_p, frame_length=frame_length, frame_step=frame_step)
+                mag_true = tf.abs(stft_true)
+                mag_pred = tf.abs(stft_pred)
+                mag_delta = tf.abs(mag_true - mag_pred)
 
-            if mel_w > 0.0 and mel_matrix is not None:
-                mel_true = tf.tensordot(mag_true, mel_matrix, 1)
-                mel_pred = tf.tensordot(mag_pred, mel_matrix, 1)
-                log_mel_true = tf.math.log(tf.maximum(mel_true, 1e-5))
-                log_mel_pred = tf.math.log(tf.maximum(mel_pred, 1e-5))
-                mel_loss = tf.reduce_mean(tf.abs(log_mel_true - log_mel_pred))
-                loss = loss + mel_w * mel_loss
+                if a_w > 0.0 and a_weight_tensor is not None:
+                    a_weighted_delta = mag_delta * a_weight_tensor
+                    a_loss = tf.reduce_mean(tf.pow(a_weighted_delta + 1e-6, stft_p))
+                    loss = loss + a_w * a_loss
+
+                if mel_w > 0.0 and mel_matrix is not None:
+                    mel_true = tf.tensordot(mag_true, mel_matrix, 1)
+                    mel_pred = tf.tensordot(mag_pred, mel_matrix, 1)
+                    log_mel_true = tf.math.log(tf.maximum(mel_true, 1e-5))
+                    log_mel_pred = tf.math.log(tf.maximum(mel_pred, 1e-5))
+                    mel_loss = tf.reduce_mean(tf.abs(log_mel_true - log_mel_pred))
+                    loss = loss + mel_w * mel_loss
 
         return loss
 
@@ -693,6 +740,15 @@ def snr_db_metric(y_true, y_pred):
     return 10.0 * tf.math.log(num / den) / tf.math.log(10.0)
 
 
+def _seanet_resblock_1d(x, filters, kernel_size, dilation_rate=1):
+    """Lightweight SEANet-style dilated residual block with Snake periodic activation."""
+    h = SnakeActivation()(x)
+    h = layers.Conv1D(filters, kernel_size, padding="same", dilation_rate=dilation_rate)(h)
+    h = SnakeActivation()(h)
+    h = layers.Conv1D(filters, 1, padding="same")(h)
+    return layers.Add()([x, h])
+
+
 def build_audio_autoencoder(
         clip_len,
         latent_dim,
@@ -703,80 +759,66 @@ def build_audio_autoencoder(
         model_base_filters=48,
         model_kernel_size=5,
         channels=1,
+        latent_channels=0,
 ):
     """
-    FIXED HIGH-FIDELITY ARCHITECTURE:
-    1. Replaces GlobalAveragePooling1D (which completely destroys time dimensions)
-       with a dynamic Dense temporal flattening spatial projection.
-    2. Removes ReLU constraint (activation='linear') from bottleneck layer so
-       latent variables can represent the full, continuous phase of the audio wave.
-    3. Replaces raw UpSampling1D (nearest neighbor steps triggering aliasing digital hiss)
-       with learned, fractional-strided Transposed Convolutions (Conv1DTranspose).
-    4. Removes encoder-to-decoder skip connections so the Decoder evaluates strictly
-       and independently from the Compressed Latent Bottleneck during inference!
-    5. Inserts opt-in Straight-Through Estimator (STE) bit-depth quantization (Milestone A1).
+    SEANET-STYLE FULLY CONVOLUTIONAL AUDIO CODEC ARCHITECTURE:
+    1. Eliminates the 50M-100M param Flatten()->Dense() bottleneck in favor of a compact
+       fully-convolutional 1D bottleneck (~500K-1M total params, >50x smaller).
+    2. Uses dilated residual blocks (dilations 1, 3) + SnakeActivation for harmonic fidelity.
+    3. Uses Conv1DTranspose with kernel = 2*stride to eliminate upsampling aliasing/hiss.
+    4. Bounds the convolutional latent with tanh into [-1, 1] for FSQ/STE quantization.
+    5. Zero encoder-to-decoder skip connections so the Decoder runs strictly from the bottleneck.
     """
     num_channels = int(channels)
     inputs = layers.Input(shape=(clip_len, num_channels))
     base_filters = max(16, int(model_base_filters))
-    kernel_size = max(1, int(model_kernel_size))
+    kernel_size = max(3, int(model_kernel_size))
+    c_latent = int(latent_channels) if int(latent_channels) > 0 else max(4, min(16, int(latent_dim) // 16))
+    strides = (2, 2, 4, 4) if int(clip_len) % 64 == 0 else (2, 2, 2, 2)
+    stage_filters = [base_filters, base_filters * 2, base_filters * 3, base_filters * 4]
 
-    # Encoder Stage 1 (16000 -> 8000)
-    e1 = layers.Conv1D(base_filters, kernel_size, strides=2, padding="same", activation="relu")(inputs)
-    e1 = layers.Conv1D(base_filters, kernel_size, padding="same", activation="relu")(e1)
+    # Stem
+    x = layers.Conv1D(base_filters, kernel_size, padding="same")(inputs)
 
-    # Encoder Stage 2 (8000 -> 4000)
-    e2 = layers.Conv1D(base_filters * 2, kernel_size, strides=2, padding="same", activation="relu")(e1)
-    e2 = layers.Conv1D(base_filters * 2, kernel_size, padding="same", activation="relu")(e2)
+    # Encoder stages (64x temporal downsampling on 16kHz -> 250 Hz latent frames)
+    for st, f in zip(strides, stage_filters):
+        x = _seanet_resblock_1d(x, x.shape[-1], kernel_size, dilation_rate=1)
+        x = _seanet_resblock_1d(x, x.shape[-1], kernel_size, dilation_rate=3)
+        x = SnakeActivation()(x)
+        x = layers.Conv1D(f, st * 2, strides=st, padding="same")(x)
 
-    # Encoder Stage 3 (4000 -> 2000)
-    e3 = layers.Conv1D(base_filters * 3, kernel_size, strides=2, padding="same", activation="relu")(e2)
-    e3 = layers.Conv1D(base_filters * 3, kernel_size, padding="same", activation="relu")(e3)
-
-    # Encoder Stage 4 (2000 -> 1000)
-    e4 = layers.Conv1D(base_filters * 4, kernel_size, strides=2, padding="same", activation="relu")(e3)
-    e4 = layers.Conv1D(base_filters * 4, kernel_size, padding="same", activation="relu")(e4)
-
-    # TEMPORAL CONSERVING FLATTENING (No Global Pooling!)
-    # Quantify downsample scale dynamically to support dynamic sample configurations
-    down = clip_len // 16
-    x = layers.Flatten()(e4)
-
-    # Latent Regularization
+    # Latent Regularization + tanh-bounded convolutional bottleneck
     bottleneck_reg = None
     if latent_l1 > 0.0 or latent_l2 > 0.0:
         bottleneck_reg = regularizers.L1L2(l1=float(max(0.0, latent_l1)), l2=float(max(0.0, latent_l2)))
 
-    # LINEAR BOTTLENECK: Crucial for phase and continuous audio transitions (-inf, +inf)
-    latent = layers.Dense(latent_dim, activation="linear", name="bottleneck", activity_regularizer=bottleneck_reg)(x)
+    x = SnakeActivation()(x)
+    latent = layers.Conv1D(
+        c_latent,
+        1,
+        padding="same",
+        activation="tanh",
+        name="bottleneck",
+        activity_regularizer=bottleneck_reg,
+    )(x)
 
-    # STRAIGHT-THROUGH ESTIMATOR (STE) QUANTIZATION (Milestone A1)
+    # FSQ / Straight-Through Estimator (STE) quantization
     latent_quant = StraightThroughQuantize(
         bit_depth=latent_bit_depth,
         quant_noise_anneal=quant_noise_anneal,
         name="bottleneck_quant",
     )(latent)
 
-    # Decode Latent Code (No Skip connections bypassing the bottleneck)
-    x_dec = layers.Dense(down * base_filters * 4, activation="relu")(latent_quant)
-    x_dec = layers.Reshape((down, base_filters * 4))(x_dec)
+    # Decoder strictly from quantized bottleneck
+    x_dec = layers.Conv1D(stage_filters[-1], 1, padding="same")(latent_quant)
+    for st, f in zip(reversed(strides), reversed([base_filters, *stage_filters[:-1]])):
+        x_dec = SnakeActivation()(x_dec)
+        x_dec = layers.Conv1DTranspose(f, st * 2, strides=st, padding="same")(x_dec)
+        x_dec = _seanet_resblock_1d(x_dec, f, kernel_size, dilation_rate=1)
+        x_dec = _seanet_resblock_1d(x_dec, f, kernel_size, dilation_rate=3)
 
-    # Decoder Stage 4: Transposed learned upsampling smooths interpolation (1000 -> 2000)
-    x_dec = layers.Conv1DTranspose(base_filters * 3, kernel_size, strides=2, padding="same", activation="relu")(x_dec)
-    x_dec = layers.Conv1D(base_filters * 3, kernel_size, padding="same", activation="relu")(x_dec)
-
-    # Decoder Stage 3: (2000 -> 4000)
-    x_dec = layers.Conv1DTranspose(base_filters * 2, kernel_size, strides=2, padding="same", activation="relu")(x_dec)
-    x_dec = layers.Conv1D(base_filters * 2, kernel_size, padding="same", activation="relu")(x_dec)
-
-    # Decoder Stage 2: (4000 -> 8000)
-    x_dec = layers.Conv1DTranspose(base_filters, kernel_size, strides=2, padding="same", activation="relu")(x_dec)
-    x_dec = layers.Conv1D(base_filters, kernel_size, padding="same", activation="relu")(x_dec)
-
-    # Decoder Stage 1: (8000 -> 16000)
-    x_dec = layers.Conv1DTranspose(base_filters, kernel_size, strides=2, padding="same", activation="relu")(x_dec)
-
-    # Squeeze Output projection
+    x_dec = SnakeActivation()(x_dec)
     outputs = layers.Conv1D(num_channels, kernel_size, padding="same", activation="tanh")(x_dec)
 
     return Model(inputs, outputs, name="audio_autoencoder")
@@ -799,26 +841,47 @@ class TargetSNRCallback(callbacks.Callback):
 
 
 def export_tflite_model(model, run_dir, use_fp16=False):
-    """
-    CRITICAL MAC M1 FIX: Converts directly from active memory using from_keras_model.
-    Bypasses disk-bound saved_model MLIR C++ parsers that trigger standard ARM SIGABRT errors.
-    """
+    """Export TFLite in an isolated subprocess via SavedModel so any C++ MLIR abort
+    cannot crash the parent training process."""
     os.makedirs(run_dir, exist_ok=True)
     tflite_path = os.path.join(run_dir, "audio_autoencoder.tflite")
 
-    print("[*] Initiating macOS ARM M1 memory-safe TFLite serialization pipeline...")
-    converter = tf.lite.TFLiteConverter.from_keras_model(model)
+    with tempfile.TemporaryDirectory(prefix="audio_tflite_export_") as tmp_dir:
+        saved_model_dir = os.path.join(tmp_dir, "saved_model")
+        helper_path = os.path.join(tmp_dir, "convert_tflite.py")
+        if hasattr(model, "export"):
+            model.export(saved_model_dir)
+        else:
+            tf.saved_model.save(model, saved_model_dir)
 
-    # Skip experimental compiler passes which cause the Constant op optimization error
-    converter.experimental_new_converter = False
+        helper_code = """
+import sys
+import tensorflow as tf
 
-    if use_fp16:
-        converter.optimizations = [tf.lite.Optimize.DEFAULT]
-        converter.target_spec.supported_types = [tf.float16]
+saved_model_dir, output_tflite, fp16_flag = sys.argv[1], sys.argv[2], sys.argv[3] == "1"
+converter = tf.lite.TFLiteConverter.from_saved_model(saved_model_dir)
+if fp16_flag:
+    converter.optimizations = [tf.lite.Optimize.DEFAULT]
+    converter.target_spec.supported_types = [tf.float16]
+tflite_model = converter.convert()
+with open(output_tflite, "wb") as f:
+    f.write(tflite_model)
+""".strip()
+        with open(helper_path, "w", encoding="utf-8") as f:
+            f.write(helper_code)
 
-    tflite_model = converter.convert()
-    with open(tflite_path, "wb") as f:
-        f.write(tflite_model)
+        env = os.environ.copy()
+        env.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
+        proc = subprocess.run(
+            [sys.executable, helper_path, saved_model_dir, tflite_path, "1" if use_fp16 else "0"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+        )
+        if proc.returncode != 0:
+            tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-8:]
+            raise RuntimeError("TFLite converter subprocess failed: " + " | ".join(tail))
 
     return tflite_path
 
@@ -962,6 +1025,7 @@ def compute_audio_compression_accounting(model, test_data, clip_len, latent_dim,
 
     latents = np.concatenate(latent_samples, axis=0)
     n_clips = latents.shape[0]
+    symbols_per_clip = int(np.prod(latents.shape[1:]))
 
     if latent_bit_depth and int(latent_bit_depth) > 0:
         bd = int(latent_bit_depth)
@@ -977,7 +1041,7 @@ def compute_audio_compression_accounting(model, test_data, clip_len, latent_dim,
         nonzero = counts[counts > 0]
         probs = nonzero / nonzero.sum()
         entropy_bits_per_dim = float(-np.sum(probs * np.log2(probs)))
-        entropy_bytes_per_clip = float((entropy_bits_per_dim * latent_dim) / 8.0)
+        entropy_bytes_per_clip = float((entropy_bits_per_dim * symbols_per_clip) / 8.0)
 
         # Range encode discrete symbols
         freqs = np.maximum(counts, 1)
@@ -989,6 +1053,7 @@ def compute_audio_compression_accounting(model, test_data, clip_len, latent_dim,
         result["actual"] = {
             "quantized": True,
             "latent_bit_depth": bd,
+            "latent_symbols_per_clip": symbols_per_clip,
             "entropy_bits_per_dim": entropy_bits_per_dim,
             "entropy_estimate_bytes_per_clip": entropy_bytes_per_clip,
             "actual_latent_bytes_per_clip": actual_bytes_per_clip,
@@ -998,11 +1063,12 @@ def compute_audio_compression_accounting(model, test_data, clip_len, latent_dim,
         result["actual_latent_bytes_per_clip"] = actual_bytes_per_clip
         result["actual_compression_ratio"] = actual_ratio
     else:
-        raw_bytes_per_clip = float(latent_dim * 4)  # float32 = 4 bytes per dim
-        actual_ratio = float(input_pcm_bytes_per_clip / raw_bytes_per_clip)
+        raw_bytes_per_clip = float(symbols_per_clip * 4)  # float32 = 4 bytes per symbol
+        actual_ratio = float(input_pcm_bytes_per_clip / max(1e-6, raw_bytes_per_clip))
         result["actual"] = {
             "quantized": False,
             "latent_bit_depth": None,
+            "latent_symbols_per_clip": symbols_per_clip,
             "actual_latent_bytes_per_clip": raw_bytes_per_clip,
             "actual_compression_ratio": actual_ratio,
             "entropy_estimate_bytes_per_clip": raw_bytes_per_clip,
@@ -1220,6 +1286,7 @@ def main():
         model_base_filters=args.model_base_filters,
         model_kernel_size=args.model_kernel_size,
         channels=args.num_channels,
+        latent_channels=args.latent_channels,
     )
     loss_fn = make_audio_loss(
         args.loss_mse_weight,
@@ -1233,8 +1300,11 @@ def main():
         clip_len=clip_len,
         num_mel_bins=args.mel_bins,
     )
+    opt_kwargs = {"learning_rate": args.lr}
+    if float(args.grad_clipnorm) > 0:
+        opt_kwargs["clipnorm"] = float(args.grad_clipnorm)
     model.compile(
-        optimizer=tf.keras.optimizers.Adam(learning_rate=args.lr),
+        optimizer=tf.keras.optimizers.Adam(**opt_kwargs),
         loss=loss_fn,
         metrics=["mse", psnr_metric, snr_db_metric],
     )

@@ -41,3 +41,6 @@ models/production_bundle/best_20260702_235656/video/video_model.weights.h5
 models/smoke_test/
 models/smoke_test_image_lossy/
 models/timeboxed_run/
+models/cache/
+models/video_smoke/
+models/optimized_run/

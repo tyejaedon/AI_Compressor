@@ -305,23 +305,8 @@ def fixed_resource_args(
         train_dir = cifar_root / "train"
         val_dir = cifar_root / "val"
         test_dir = cifar_root / "test"
-        if image_trainer == "lossy":
-            if profile == "tiny":
-                return [
-                    "--train-dir",
-                    str(train_dir),
-                    "--val-dir",
-                    str(val_dir),
-                    "--test-dir",
-                    str(test_dir),
-                    "--real-only",
-                    "--target-psnr",
-                    "22",
-                    "--target-compression-ratio",
-                    "0.90",
-                    "--no-export-tflite",
-                ]
-            return [
+        if train_dir.exists():
+            img_data_args = [
                 "--train-dir",
                 str(train_dir),
                 "--val-dir",
@@ -329,6 +314,20 @@ def fixed_resource_args(
                 "--test-dir",
                 str(test_dir),
                 "--real-only",
+            ]
+        else:
+            img_data_args = ["--use-cifar10"]
+
+        if image_trainer == "lossy":
+            if profile == "tiny":
+                return img_data_args + [
+                    "--target-psnr",
+                    "22",
+                    "--target-compression-ratio",
+                    "0.90",
+                    "--no-export-tflite",
+                ]
+            return img_data_args + [
                 "--target-psnr",
                 "30",
                 "--target-compression-ratio",
@@ -336,26 +335,12 @@ def fixed_resource_args(
                 "--no-export-tflite",
             ]
         if profile == "tiny":
-            return [
-                "--train-dir",
-                str(train_dir),
-                "--val-dir",
-                str(val_dir),
-                "--test-dir",
-                str(test_dir),
-                "--real-only",
+            return img_data_args + [
                 "--target-psnr",
                 "22",
                 "--no-export-tflite",
             ]
-        return [
-            "--train-dir",
-            str(train_dir),
-            "--val-dir",
-            str(val_dir),
-            "--test-dir",
-            str(test_dir),
-            "--real-only",
+        return img_data_args + [
             "--target-psnr",
             "30",
             "--no-export-tflite",

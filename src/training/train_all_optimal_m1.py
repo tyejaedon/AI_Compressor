@@ -132,6 +132,18 @@ def modality_plan(args: argparse.Namespace) -> list[dict[str, object]]:
     target_psnr = str(args.target_psnr)
     common = {"target_psnr": target_psnr, "no_export_tflite": True}
 
+    has_cifar_dir = Path("data/cifar10 2/train").exists()
+    image_dataset_args = (
+        {
+            "train_dir": "data/cifar10 2/train",
+            "val_dir": "data/cifar10 2/val",
+            "test_dir": "data/cifar10 2/test",
+            "real_only": True,
+        }
+        if has_cifar_dir
+        else {"use_cifar10": True}
+    )
+
     return [
         {
             "name": "image_standard_upscaler",
@@ -141,11 +153,8 @@ def modality_plan(args: argparse.Namespace) -> list[dict[str, object]]:
             "base": {
                 **common,
                 "preset": "custom",
-                "train_dir": "data/cifar10 2/train",
-                "val_dir": "data/cifar10 2/val",
-                "test_dir": "data/cifar10 2/test",
+                **image_dataset_args,
                 "holdout_dir": "data/ImageData",
-                "real_only": True,
                 "upscale_factor": 2,
                 "degrade_interp": "bicubic",
             },
@@ -165,10 +174,7 @@ def modality_plan(args: argparse.Namespace) -> list[dict[str, object]]:
             "base": {
                 **common,
                 "preset": "custom",
-                "train_dir": "data/cifar10 2/train",
-                "val_dir": "data/cifar10 2/val",
-                "test_dir": "data/cifar10 2/test",
-                "real_only": True,
+                **image_dataset_args,
                 "run_baseline_benchmark": True,
                 "target_compression_ratio": 0.80,
             },

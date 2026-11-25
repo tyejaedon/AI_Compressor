@@ -7,7 +7,9 @@ import json
 import logging
 import math
 import os
+import subprocess
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -127,6 +129,24 @@ def parse_args_extended():
         choices=["area", "bilinear", "bicubic"],
         help="Interpolation used while downscaling real-image patches",
     )
+    parser.add_argument(
+        "--degrade-noise-std",
+        type=float,
+        default=0.015,
+        help="Std-dev of additive Gaussian sensor noise applied during degradation (0 disables noise)",
+    )
+    parser.add_argument(
+        "--compact-arch",
+        dest="compact_arch",
+        action="store_true",
+        help="Use depthwise-separable convolutions in inner layers to dramatically reduce model size",
+    )
+    parser.add_argument(
+        "--no-compact-arch",
+        dest="compact_arch",
+        action="store_false",
+        help="Use standard Conv2D in all layers",
+    )
     parser.add_argument("--real-only", action="store_true", help="Require real files and disable synthetic fallbacks")
     parser.add_argument("--real-file-limit", type=int, default=0, help="Optional cap for discovered real image files")
     parser.add_argument("--train-patches-per-image", type=int, default=6, help="Random crop samples drawn per real training image each epoch")
@@ -176,7 +196,7 @@ def parse_args_extended():
     parser.add_argument("--export-tflite", dest="export_tflite", action="store_true", help="Export Android-ready .tflite model")
     parser.add_argument("--no-export-tflite", dest="export_tflite", action="store_false", help="Disable TFLite export")
     parser.add_argument("--tflite-fp16", action="store_true", help="Use float16 optimization when exporting TFLite")
-    parser.set_defaults(export_tflite=True, real_augment=True)
+    parser.set_defaults(export_tflite=True, real_augment=True, compact_arch=True)
     return parser.parse_args()
 
 
@@ -221,6 +241,7 @@ def apply_preset(args):
     args.target_output_jpeg_quality = int(np.clip(args.target_output_jpeg_quality, 1, 100))
     args.target_output_jpeg_samples = max(1, int(args.target_output_jpeg_samples))
     args.residual_scale = max(0.0, float(args.residual_scale))
+    args.degrade_noise_std = max(0.0, float(args.degrade_noise_std))
     args.model_base_filters = max(16, int(args.model_base_filters))
     args.model_kernel_size = max(1, int(args.model_kernel_size))
     return args
@@ -423,6 +444,43 @@ def build_or_load_image_tensor_cache(paths, min_size, cache_dir, split_name):
     }
 
 
+def filter_paths_with_metadata_cache(paths, min_size, cache_dir):
+    """Filter paths by min_size using a lightweight JSON metadata cache (no duplicate TFRecord)."""
+    resolved_cache_dir = os.path.abspath(os.path.expanduser(cache_dir))
+    cache_root = os.path.join(resolved_cache_dir, "image_tensor_cache")
+    os.makedirs(cache_root, exist_ok=True)
+    cache_key = compute_image_tensor_cache_key(paths, min_size, "all_paths_filter")
+    manifest_path = os.path.join(cache_root, f"all_paths_filter_{cache_key}.manifest.json")
+
+    manifest = load_image_tensor_cache_manifest(manifest_path)
+    if manifest is not None:
+        kept_paths = np.array(manifest.get("kept_paths", []), dtype=np.str_)
+        skipped_records = list(manifest.get("skipped_records", []))
+        persist_skipped_records(skipped_records)
+        return kept_paths, skipped_records
+
+    kept_paths, skipped_records = filter_paths_by_min_size(paths, min_size)
+    tmp_manifest_path = manifest_path + ".tmp"
+    payload = {
+        "version": 1,
+        "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "split": "all_paths_filter",
+        "block_size": int(min_size),
+        "cache_key": cache_key,
+        "kept_paths": [str(p) for p in kept_paths],
+        "skipped_records": skipped_records,
+    }
+    try:
+        with open(tmp_manifest_path, "w") as f:
+            json.dump(payload, f, indent=2)
+        os.replace(tmp_manifest_path, manifest_path)
+    except Exception:
+        if os.path.exists(tmp_manifest_path):
+            os.remove(tmp_manifest_path)
+        raise
+    return kept_paths, skipped_records
+
+
 def maybe_prepare_real_image_cache(paths, min_size, cache_dir, split_name):
     if not cache_dir:
         kept_paths, skipped_records = filter_paths_by_min_size(paths, min_size)
@@ -497,11 +555,13 @@ def make_dataset_from_image_dataset(
     center_crop=False,
     upscale_factor=4,
     degrade_interp="bicubic",
+    degrade_noise_std=0.015,
 ):
     block = int(block_size)
     patch_count = max(1, int(patches_per_image))
     up_factor = max(1, int(upscale_factor))
     down_block = max(8, block // up_factor)
+    noise_std = max(0.0, float(degrade_noise_std))
     interp_map = {
         "area": tf.image.ResizeMethod.AREA,
         "bilinear": tf.image.ResizeMethod.BILINEAR,
@@ -523,12 +583,12 @@ def make_dataset_from_image_dataset(
         patch = tf.clip_by_value(patch, 0.0, 1.0)
 
         if up_factor > 1:
-            # Multi-stage Samsung Remaster simulation: Add compression artifacts + Downscaling Noise
+            # Multi-stage Remaster simulation: Downscaling + optional sensory noise
             down = tf.image.resize(patch, [down_block, down_block], method=degrade_method)
 
-            # Inject standard Gaussian sensory noise simulating low-light lenses
-            noise = tf.random.normal(shape=tf.shape(down), mean=0.0, stddev=0.015, seed=seed)
-            down = tf.clip_by_value(down + noise, 0.0, 1.0)
+            if noise_std > 0.0:
+                noise = tf.random.normal(shape=tf.shape(down), mean=0.0, stddev=noise_std)
+                down = tf.clip_by_value(down + noise, 0.0, 1.0)
 
             lowres_input = tf.image.resize(down, [block, block], method=tf.image.ResizeMethod.BILINEAR)
         else:
@@ -561,6 +621,7 @@ def make_dataset_from_paths(
     center_crop=False,
     upscale_factor=4,
     degrade_interp="bicubic",
+    degrade_noise_std=0.015,
 ):
     def _decode(path):
         image_bytes = tf.io.read_file(path)
@@ -584,6 +645,7 @@ def make_dataset_from_paths(
         center_crop=center_crop,
         upscale_factor=upscale_factor,
         degrade_interp=degrade_interp,
+        degrade_noise_std=degrade_noise_std,
     )
 
 
@@ -599,6 +661,7 @@ def make_dataset_from_cached_tfrecord(
     center_crop=False,
     upscale_factor=4,
     degrade_interp="bicubic",
+    degrade_noise_std=0.015,
 ):
     feature_spec = {
         "image": tf.io.FixedLenFeature([], tf.string),
@@ -626,6 +689,7 @@ def make_dataset_from_cached_tfrecord(
         center_crop=center_crop,
         upscale_factor=upscale_factor,
         degrade_interp=degrade_interp,
+        degrade_noise_std=degrade_noise_std,
     )
 
 
@@ -641,6 +705,7 @@ def make_dataset_from_real_split(
     center_crop=False,
     upscale_factor=4,
     degrade_interp="bicubic",
+    degrade_noise_std=0.015,
 ):
     if cache_info and cache_info.get("enabled") and cache_info.get("tfrecord_path"):
         return make_dataset_from_cached_tfrecord(
@@ -655,6 +720,7 @@ def make_dataset_from_real_split(
             center_crop=center_crop,
             upscale_factor=upscale_factor,
             degrade_interp=degrade_interp,
+            degrade_noise_std=degrade_noise_std,
         )
     return make_dataset_from_paths(
         paths,
@@ -667,6 +733,7 @@ def make_dataset_from_real_split(
         center_crop=center_crop,
         upscale_factor=upscale_factor,
         degrade_interp=degrade_interp,
+        degrade_noise_std=degrade_noise_std,
     )
 
 
@@ -759,6 +826,7 @@ def build_explicit_split_datasets(args):
             center_crop=False,
             upscale_factor=args.upscale_factor,
             degrade_interp=args.degrade_interp,
+            degrade_noise_std=args.degrade_noise_std,
         ),
         make_dataset_from_real_split(
             val_paths,
@@ -772,6 +840,7 @@ def build_explicit_split_datasets(args):
             center_crop=True,
             upscale_factor=args.upscale_factor,
             degrade_interp=args.degrade_interp,
+            degrade_noise_std=args.degrade_noise_std,
         ),
         make_dataset_from_real_split(
             test_paths,
@@ -785,6 +854,7 @@ def build_explicit_split_datasets(args):
             center_crop=True,
             upscale_factor=args.upscale_factor,
             degrade_interp=args.degrade_interp,
+            degrade_noise_std=args.degrade_noise_std,
         ),
         {
             "source": "explicit_directories",
@@ -847,11 +917,10 @@ def build_datasets(args):
         image_paths = image_paths[: args.real_file_limit]
 
     if cache_dir:
-        image_paths, skipped_records, _ = maybe_prepare_real_image_cache(
+        image_paths, skipped_records = filter_paths_with_metadata_cache(
             image_paths,
             args.block_size,
             cache_dir,
-            "all_paths",
         )
     else:
         image_paths, skipped_records = filter_paths_by_min_size(image_paths, args.block_size)
@@ -907,6 +976,7 @@ def build_datasets(args):
                 center_crop=False,
                 upscale_factor=args.upscale_factor,
                 degrade_interp=args.degrade_interp,
+                degrade_noise_std=args.degrade_noise_std,
             ),
             make_dataset_from_real_split(
                 val_paths,
@@ -920,6 +990,7 @@ def build_datasets(args):
                 center_crop=True,
                 upscale_factor=args.upscale_factor,
                 degrade_interp=args.degrade_interp,
+                degrade_noise_std=args.degrade_noise_std,
             ),
             make_dataset_from_real_split(
                 test_paths,
@@ -933,6 +1004,7 @@ def build_datasets(args):
                 center_crop=True,
                 upscale_factor=args.upscale_factor,
                 degrade_interp=args.degrade_interp,
+                degrade_noise_std=args.degrade_noise_std,
             ),
             {
                 "source": "filesystem",
@@ -1024,33 +1096,53 @@ def ssim_metric(y_true, y_pred):
     return tf.reduce_mean(tf.image.ssim(y_true, y_pred, max_val=1.0))
 
 
-def build_autoencoder(latent_dim, model_base_filters=64, model_kernel_size=3, residual_scale=1.0):
+@tf.keras.utils.register_keras_serializable(package="ai_compressor_image")
+class ResidualClipAdd(layers.Layer):
+    """Serializable residual addition + [0, 1] clipping (replaces Lambda for Keras 3 safe_mode)."""
+
+    def __init__(self, residual_gain=1.0, **kwargs):
+        super().__init__(**kwargs)
+        self.residual_gain = max(0.0, float(residual_gain))
+
+    def call(self, inputs):
+        base, residual = inputs
+        return tf.clip_by_value(base + self.residual_gain * residual, 0.0, 1.0)
+
+    def get_config(self):
+        config = super().get_config()
+        config.update({"residual_gain": self.residual_gain})
+        return config
+
+
+def build_autoencoder(latent_dim, model_base_filters=64, model_kernel_size=3, residual_scale=1.0, compact_arch=True):
     """
     High-capacity residual network optimized for fast edge reconstruction on M1 ARM architecture.
     Uses multi-stage residual processing channels to isolate edge variations without bottlenecks.
+    When `compact_arch=True`, inner spatial layers use SeparableConv2D for a ~5x smaller model.
     """
     inputs = layers.Input(shape=(None, None, 3))
     base_filters = max(16, int(model_base_filters))
     kernel_size = max(1, int(model_kernel_size))
     deep_filters = max(base_filters * 2, base_filters + 8)
+    inner_conv = layers.SeparableConv2D if compact_arch else layers.Conv2D
 
     # Shallow feature mapping
     x0 = layers.Conv2D(base_filters, kernel_size, padding="same", activation="relu")(inputs)
-    x1 = layers.Conv2D(base_filters, kernel_size, padding="same", activation="relu")(x0)
+    x1 = inner_conv(base_filters, kernel_size, padding="same", activation="relu")(x0)
 
     # Encoder stage 1
-    x2 = layers.Conv2D(deep_filters, kernel_size, padding="same", activation="relu")(x1)
+    x2 = inner_conv(deep_filters, kernel_size, padding="same", activation="relu")(x1)
 
     # Latent dimension bottleneck compression
     bottleneck = layers.Conv2D(latent_dim, 1, padding="same", activation="relu", name="bottleneck")(x2)
 
     # Decoder mapping
-    x3 = layers.Conv2D(deep_filters, kernel_size, padding="same", activation="relu")(bottleneck)
+    x3 = inner_conv(deep_filters, kernel_size, padding="same", activation="relu")(bottleneck)
 
     # Skip-connection linking multi-resolution edge maps together
     x = layers.Add()([x3, x2])
-    x = layers.Conv2D(base_filters, kernel_size, padding="same", activation="relu")(x)
-    x = layers.Conv2D(base_filters, kernel_size, padding="same", activation="relu")(x)
+    x = inner_conv(base_filters, kernel_size, padding="same", activation="relu")(x)
+    x = inner_conv(base_filters, kernel_size, padding="same", activation="relu")(x)
     x = layers.Add()([x, x1])
 
     # Sharpening head isolates high-frequency delta maps
@@ -1058,7 +1150,7 @@ def build_autoencoder(latent_dim, model_base_filters=64, model_kernel_size=3, re
 
     # Output projection combines native lower-resolution inputs with isolated edge deltas
     residual_gain = max(0.0, float(residual_scale))
-    outputs = layers.Lambda(lambda t: tf.clip_by_value(t[0] + residual_gain * t[1], 0.0, 1.0), name="reconstruction")([inputs, residual])
+    outputs = ResidualClipAdd(residual_gain=residual_gain, name="reconstruction")([inputs, residual])
 
     return Model(inputs, outputs, name="remaster_autoencoder")
 
@@ -1105,34 +1197,55 @@ class TargetOutputJpegRatioCallback(callbacks.Callback):
         self.best_ratio = max(self.best_ratio, ratio_val)
         logs["val_output_jpeg_ratio"] = ratio_val
         print(f"\n[+] Epoch {epoch + 1} output/target JPEG(Q{self.jpeg_quality}) ratio: {ratio_val:.3f}")
-        if ratio_val >= self.target_ratio:
+        current_psnr = logs.get("val_psnr_metric", logs.get("psnr_metric"))
+        psnr_ok = current_psnr is None or float(np.asarray(current_psnr).item()) >= 20.0
+        if ratio_val >= self.target_ratio and psnr_ok:
             print(f"[+] Target output JPEG ratio reached at epoch {epoch + 1}: {ratio_val:.3f}")
             self.model.stop_training = True
 
 
 def export_tflite_model(model, run_dir, use_fp16=False):
-    """
-    CRITICAL MAC M1 FIX: Converts directly from active memory using from_keras_model.
-    Bypasses disk parsing that triggers the mlir::tf_saved_model::FreezeVariables SIGABRT crash.
-    """
+    """Export TFLite in an isolated subprocess via SavedModel so any C++ MLIR abort
+    cannot crash the parent training process."""
     os.makedirs(run_dir, exist_ok=True)
     tflite_path = os.path.join(run_dir, "production_model.tflite")
 
-    print("[*] Initiating macOS ARM M1 memory-safe TFLite serialization pipeline...")
+    with tempfile.TemporaryDirectory(prefix="image_tflite_export_") as tmp_dir:
+        saved_model_dir = os.path.join(tmp_dir, "saved_model")
+        helper_path = os.path.join(tmp_dir, "convert_tflite.py")
+        if hasattr(model, "export"):
+            model.export(saved_model_dir)
+        else:
+            tf.saved_model.save(model, saved_model_dir)
 
-    # SAFE PATH: Convert directly in-memory to skip broken disk parsing loops
-    converter = tf.lite.TFLiteConverter.from_keras_model(model)
+        helper_code = """
+import sys
+import tensorflow as tf
 
-    # Skip experimental compiler passes which cause the Constant op optimization error
-    converter.experimental_new_converter = False
+saved_model_dir, output_tflite, fp16_flag = sys.argv[1], sys.argv[2], sys.argv[3] == "1"
+converter = tf.lite.TFLiteConverter.from_saved_model(saved_model_dir)
+if fp16_flag:
+    converter.optimizations = [tf.lite.Optimize.DEFAULT]
+    converter.target_spec.supported_types = [tf.float16]
+tflite_model = converter.convert()
+with open(output_tflite, "wb") as f:
+    f.write(tflite_model)
+""".strip()
+        with open(helper_path, "w", encoding="utf-8") as f:
+            f.write(helper_code)
 
-    if use_fp16:
-        converter.optimizations = [tf.lite.Optimize.DEFAULT]
-        converter.target_spec.supported_types = [tf.float16]
-
-    tflite_model = converter.convert()
-    with open(tflite_path, "wb") as f:
-        f.write(tflite_model)
+        env = os.environ.copy()
+        env.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
+        proc = subprocess.run(
+            [sys.executable, helper_path, saved_model_dir, tflite_path, "1" if use_fp16 else "0"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+        )
+        if proc.returncode != 0:
+            tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-8:]
+            raise RuntimeError("TFLite converter subprocess failed: " + " | ".join(tail))
 
     return tflite_path
 
@@ -1335,6 +1448,7 @@ def evaluate_holdout_if_requested(model, args):
         center_crop=True,
         upscale_factor=args.upscale_factor,
         degrade_interp=args.degrade_interp,
+        degrade_noise_std=args.degrade_noise_std,
     )
     steps = max(1, math.ceil(len(holdout_paths) / args.batch_size))
     eval_values = model.evaluate(ds, steps=steps, return_dict=True, verbose=0)
@@ -1390,6 +1504,7 @@ def main():
         model_base_filters=args.model_base_filters,
         model_kernel_size=args.model_kernel_size,
         residual_scale=args.residual_scale,
+        compact_arch=args.compact_arch,
     )
     opt_kwargs = {"learning_rate": args.lr}
     if args.grad_clipnorm > 0:
