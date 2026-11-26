@@ -1,6 +1,20 @@
 # AI Compressor - Neural Compression for Image, Audio, and Video
 
-Local-first neural compression project with autoencoders for image, audio, and video.
+Local-first neural compression project with autoencoders for image, audio, and video, optimized for Apple M1 and mobile `.tflite` deployment.
+
+## Module & Encoder Directory
+
+Each subsystem has its own detailed, digestible README covering architectures, CLI flags, and examples:
+
+- **Encoders & Trainers (`src/training/`)**: [src/training/README.md](src/training/README.md)
+  - `train_autoencoder_image_local.py` — Compact `SeparableConv2D` image remaster / edge-sharpening autoencoder (`ResidualClipAdd`, JSON+TFRecord cache, `--degrade-noise-std`, subprocess FP16 TFLite)
+  - `train_autoencoder_image_lossy_local.py` — Lossy rate-distortion autoencoder (`8x` spatial downsampling, `UpSampling2D` + `SeparableConv2D`, 4/6/8/10-bit QAT, per-channel Shannon entropy loss, range coder, JPEG/WebP matched-PSNR benchmark)
+  - `train_upscaler_image_local.py` — Learned `2x`/`3x`/`4x` single-image super-resolution trainer
+  - `train_autoencoder_audio_local.py` — SEANet-style 1D convolutional audio codec (`SnakeActivation`, dilated residual blocks, `64x` temporal downsample, FSQ/STE quantization, Multi-Resolution STFT + Mel + A-weighted loss)
+  - `train_autoencoder_video_local.py` — Compact `(2+1)D` spatio-temporal video autoencoder (true convolutional bottleneck, video-level non-leaking splits, `uint8` clip cache, `--temporal-mode residual`, 6/8-bit QAT, H.264/VP9 benchmark)
+- **Audio Processing & Streaming (`src/audio/`)**: [src/audio/README.md](src/audio/README.md) (`prepare_audio_dataset.py`, `realtime_audio_compression_pipeline.py`, vortex visualizer)
+- **Production Pipeline (`src/pipeline/`)**: [src/pipeline/README.md](src/pipeline/README.md) (`run_full_production_pipeline.py`, `build_best_model_bundle.py`, pruning)
+- **Reporting & Upscaling (`src/reporting/`)**: [src/reporting/README.md](src/reporting/README.md) (`generate_master_report.py`, `upscale_reconstructed_images.py`, comparisons)
 
 ## What is Neural compression
 
@@ -135,7 +149,7 @@ The lossy trainer writes matched-PSNR JPEG/WebP baseline benchmark stats into `e
 Train image (lossy, real latent bitrate + entropy coding + QAT bit-depth, see `documentation/MODEL_PARAMS_INPUT.md`):
 
 ```zsh
-python src/training/train_autoencoder_image_lossy_local.py --preset custom --use-cifar10 --epochs 20 --batch-size 8 --block-size 64 --latent-dim 48 --rate-loss-mode entropy --latent-bit-depth 6 --quant-noise-anneal --enable-entropy-coding --output-root models/image_lossy_entropy_run
+python src/training/train_autoencoder_image_lossy_local.py --preset custom --use-cifar10 --epochs 20 --batch-size 8 --block-size 64 --downsample-stages 3 --latent-dim 32 --rate-loss-mode entropy --rate-lambda 0.0005 --latent-bit-depth 6 --quant-noise-anneal --enable-entropy-coding --compact-arch --output-root models/image_lossy_entropy_run
 ```
 
 Train a learned image upscaler (Milestone 3; see `documentation/MODEL_PARAMS_INPUT.md`):
@@ -182,10 +196,10 @@ python src/audio/realtime_audio_compression_pipeline.py --model-path models/audi
 > [!NOTE]
 > `src/audio/realtime_audio_compression_pipeline.py` executes the actual trained neural autoencoder in chunked overlap-add windows over streaming PCM audio with bounded latency. This is distinct from `src/audio/realtime_audio_vortex_pipeline.py` / `src/audio/vortex_realtime_demo.py`, which are feature-extraction-only visualizers (FFT energy bands -> fluid simulation controls) that do not run model inference.
 
-Train video:
+Train video (`(2+1)D` convolutional bottleneck, residual temporal mode, 6-bit QAT, H.264/VP9 benchmark):
 
 ```zsh
-python src/training/train_autoencoder_video_local.py --preset m1-air-balanced --output-root models/video_local_run
+python src/training/train_autoencoder_video_local.py --preset m1-air-balanced --cache-dir models/cache/video --decode-workers 4 --latent-channels 16 --latent-bit-depth 6 --quant-noise-anneal --temporal-mode residual --loss-temporal-weight 0.15 --run-mp4-benchmark --benchmark-codecs h264,vp9 --output-root models/video_local_run
 ```
 
 Supported real-video extensions for training/comparisons: `.mp4`, `.mov`, `.mkv`, `.avi`, `.webm`, `.m4v`.
@@ -216,10 +230,12 @@ python src/pipeline/run_full_production_pipeline.py --trials-image-standard 10 -
 Smoke test:
 
 ```zsh
+python tests/smoke/smoke_test_local.py
 python tests/smoke/smoke_test_random_search.py
 python tests/smoke/smoke_test_image_lossy_local.py
 python tests/smoke/smoke_test_upscaler_local.py
 python tests/smoke/smoke_test_audio_local.py
+python tests/smoke/smoke_test_video_local.py
 python tests/smoke/smoke_test_realtime_audio_compression.py
 python tests/smoke/smoke_test_vortex_pipeline.py
 python tests/smoke/smoke_test_prepare_audio_dataset.py
